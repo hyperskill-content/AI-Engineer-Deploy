@@ -29,7 +29,7 @@ If you decide to use Amazon ECR, proceed to create a public repository in the Am
 
 Next, you need to upload the container image to Amazon ECR (or the registry of choice). Since significant changes require rebuilding the image and uploading, ensure you have thoroughly tested the image and that it works as expected locally. Once you’re satisfied, check your Amazon ECR repository to find the necessary commands you need to push the image:
 
-![AWS commands](images/AWS.png)
+![AWS commands](../images/AWS.png)
 
 For Docker Hub, you would use: 
 

@@ -20,7 +20,7 @@ In this stage, you'll refactor your app to use cloud services instead of the lo
 
 Once you’ve created accounts on those platforms ([Qdrant](https://cloud.qdrant.io/), [Redis](https://redis.io/cloud/), [Langfuse](https://cloud.langfuse.com/)) the next step is to set things up. For Qdrant, start by creating a free tier cluster:
 
-![Qdrant UI](images/qdrant.png)
+![Qdrant UI](../images/qdrant.png)
 
 Next, can generate an API key and note the endpoint URL you will use for the Qdrant client. Now that you have the cluster, you need to upload your data. When you run the application for the first time, the `embed_documents()` function will create the store for you. Alternatively, you can create a snapshot from your local installation and upload it via the cluster UI. Then, update your `embed_documents()` function to retain only the necessary parts: 
 
@@ -39,7 +39,7 @@ if collection_exists:
 
 For Redis, all you need to do is create a database. Then, click “Connect” to see various ways to connect to the database: 
 
-![Redis](images/redis.png)
+![Redis](../images/redis.png)
 
 One way is to use the database connection string that looks like this: 
 
@@ -58,7 +58,7 @@ def get_redis_history(session_id: str) -> BaseChatMessageHistory:
 
 Using a database client, you can see the chat history in your Redis database. Finally, for Langfuse, all you need to do is create a new organization, project, and generate public and private keys. Then, set the `LANGFUSE_HOST` key to `https://cloud.langfuse.com`. You should now see traces in your Langfuse cloud instance:
 
-![Langfuse](images/langfuse.png)
+![Langfuse](../images/langfuse.png)
 
 ### **Deliverables**
 

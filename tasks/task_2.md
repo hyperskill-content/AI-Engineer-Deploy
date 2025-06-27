@@ -12,7 +12,7 @@
 
 Usually, we want to integrate AI capabilities into our existing applications. Imagine that the frontend team has already created the UI:
 
-![Potential UI](images/UI.png)
+![Potential UI](../images/UI.png)
 
 Also, the backend team has added the remaining application logic, enabling users to create accounts, order smartphones, and access other features. During sign-up, users are also assigned keys in LiteLLM behind the scenes. This ensures they already have an LLM usage budget linked to their account. 
 
