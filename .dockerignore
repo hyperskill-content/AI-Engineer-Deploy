@@ -1,0 +1,49 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Virtual environment directories
+venv/
+.env
+
+# Local configuration files
+*.env
+
+# IDE and editor directories
+.idea/
+.vscode/
+
+# Build directories
+build/
+dist/
+
+
+# Logs
+*.log
+
+# Coverage reports
+*.coverage
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Miscellaneous
+*.swp
+
+# System files
+.DS_Store
+
+# Python bytecode files
+*.pyc
+
+# C extensions
+*.so
+
+# Backup files
+*~
+
+# Temporary files
+*.tmp
+
+# Documentation build directories
+docs/_build/
