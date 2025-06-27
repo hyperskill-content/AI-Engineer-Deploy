@@ -53,5 +53,5 @@ In this task, your application should run as a web service that accepts POST re
 
 If you’re new to a topic, you might also want to go over the prerequisite topics. 
 
-- [Overview of FastAPI](https://hyperskill.org/learn/step/52311).
+- [Overview of FastAPI](https://hyperskill.org/learn/step/52311)
 - [Introduction to Pydantic](https://hyperskill.org/learn/step/52212)
