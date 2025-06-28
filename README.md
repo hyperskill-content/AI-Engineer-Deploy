@@ -20,7 +20,9 @@ There are various ways of deploying LLM applications depending on your needs: fo
 
 As you know, frameworks like LangChain help you orchestrate your LLM applications, and others like FastAPI let you expose clean, RESTful API endpoints. Typically, you package your code in a Docker image and use Kubernetes or a serverless platform (like AWS Lambda) to run it, enabling automatic scaling with demand. In this task, this is what you will work on.
 
-You already have an LLM app that is prepared for production. You did monitoring, evaluation, refined your prompts, and even added guardrails. Now, you will add a more robust API key and budgeting strategy, an API endpoint, containerize the app, and deploy it to AWS. This way, your app will be ready for everyone else to use.
+You already have an LLM app that is prepared for production. You did monitoring, evaluation, refined your prompts, and even added guardrails. Now, you will add a more robust API key and budgeting strategy, an API endpoint, containerize the app, and deploy it to AWS. This way, your app will be ready for everyone else to use. 
+
+The starter code (from the final stage of LLM Evals: Let's Talk Money project) is located in the `starter_code` directory of this repo.
 
 ## **Learning Outcomes**
 
@@ -33,11 +35,9 @@ Here are the main directories and files in this repo:
 ```markdown
 ├── images/
 │   ├── litellm_dashboard.png
-│   ├── system_ui.png
-│   ├── qdrant_free_cluster.png
-│   ├── redis_dashboard.png
-│   ├── langfuse_dashboard.png
+    ├── ...
 │   └── ecr_push_commands.png
+├── starter_code/
 ├── tasks/
 │   ├── task_1.md
 │   ├── task_2.md

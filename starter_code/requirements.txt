@@ -1,0 +1,12 @@
+langchain-core
+langchain-openai
+langchain-community
+langchain_qdrant
+langchain_redis
+python-dotenv
+langfuse==2.60.8
+qdrant-client
+requests
+nemoguardrails
+backoff
+pyyaml
