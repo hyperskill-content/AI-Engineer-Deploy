@@ -29,7 +29,7 @@ logging.getLogger("nemoguardrails.actions").setLevel(logging.ERROR)
 logging.getLogger("nemoguardrails.colang").setLevel(logging.ERROR)
 
 
-# Load environment variables from .env file
+# Load environment variables from env.env file
 dotenv.load_dotenv()
 session_name = f"session-{uuid.uuid4().hex[:8]}"
 user_id = "HyperUser"
