@@ -50,7 +50,7 @@ Since we don’t want the resulting image to be too large, we need to be careful
 This ensures only the needed packages are in the final image. The next thing you need to do is ensure that you’re following some recommended security best practices. For example, ensure that the application runs as a non-root user. You can do this by creating a user to run the app inside the container. Another thing is passing environment variables at runtime (ensure you’re accessing variables via `os.environ` in your code):
 
 ```bash
-docker run --env-file .env -p 8000:8000 custom-image:latest
+docker run --env-file env.env -p 8000:8000 custom-image:latest
 ```
 
 The final thing to consider is how your run the web server. In our code, we are running it with `uvicorn` as follows:
