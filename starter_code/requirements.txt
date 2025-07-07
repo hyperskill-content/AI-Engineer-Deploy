@@ -4,7 +4,7 @@ langchain-community
 langchain_qdrant
 langchain_redis
 python-dotenv
-langfuse==2.60.8
+langfuse==2.60.4
 qdrant-client
 requests
 nemoguardrails

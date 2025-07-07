@@ -74,7 +74,7 @@ docker run \
   -p 80:8000 \
   --name hypersite \
   --restart always \
-  --env-file ./.env \
+  --env-file ./env.env \
   <image_name> # e.g. public.ecr.aws/q9c7y1p3/deployment:latest
 ```
 
