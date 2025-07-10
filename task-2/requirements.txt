@@ -1,0 +1,15 @@
+# add your Python package dependencies here
+# remember to pin versions for reproducibility
+langchain-core==0.3.68
+langchain-openai==0.3.27
+langchain-community==0.3.26
+langchain_qdrant==0.2.0
+langchain_redis==0.2.3
+python-dotenv==1.1.1
+langfuse==2.60.8
+qdrant-client==1.14.3
+requests==2.32.4
+nemoguardrails==0.14.0
+backoff==2.2.1
+pyyaml==6.0.2
+gunicorn==23.0.0
