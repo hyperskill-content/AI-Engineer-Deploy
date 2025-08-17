@@ -1,57 +1,65 @@
-## **API Endpoint**
+## **Refactoring to Cloud Services**
 
 ## **Table of Contents**
 
 - [Description](#description)
 - [Recommended Development Steps](#recommended-development-steps)
 - [Deliverables](#deliverables)
-- [Useful Resources](#useful-resources)
-    - [Topics](#topics)
 
 ### **Description**
 
-Usually, we want to integrate AI capabilities into our existing applications. Imagine that the frontend team has already created the UI:
+So far,your application has been communicating locally with various services and components—your vector and Redis databases, as well as Langfuse. Since you're doing everything locally in your development environment, communication is easy — your app can just access them over your local network. However, moving to a production environment, this may not be possible (unless you host them in your on-prem servers). Additionally, you need to handle aspects such as scaling and fault tolerance as you'll, hopefully, be receiving a lot of traffic from customers.
 
-![Frontend UI](../images/UI.png)
+If you don't have the infrastructure to run services locally, you would use cloud services, which come in many flavors. You can use a public cloud like AWS or Azure and create instances for your infrastructure. This gives you the most control, but the setup process and maintenance can be complex.
 
-Also, the backend team has added the remaining application logic, enabling users to create accounts, order smartphones, and access other features. During sign-up, users are also assigned keys in LiteLLM behind the scenes. This ensures they already have an LLM usage budget linked to their account.
-
-Now, they're collaborating with you, the AI team, to integrate an AI-powered assistant to help users choose the best smartphone. What you've been building is like a microservice in a larger web application. It is decoupled from the main application, meaning it can be developed and deployed independently. The main application communicates with this application only via a REST API.
-
-Therefore, we need to implement the API endpoint to which the main application can send requests. When a user asks a question, a POST request is sent to the endpoint with the user’s query, user ID, and session ID. Once the response is generated, it will be displayed to the user in the frontend UI.
+On the other hand, you can utilize SaaS (Software as a Service) and PaaS (Platform as a Service) solutions. These allow you to access cloud services without doing much of the heavy lifting. Your PaaS provider will handle managing the infrastructure, upgrades, scaling, patches, and other tasks.  While these cloud models are easy to set up, you have no control over the platform. This may not be ideal for data-sensitive workloads.
 
 ### **Recommended Development Steps**
 
-Your task is to use FastAPI to implement the API endpoint `/ask`. The application should remain the same (monitoring, evaluations, guardrails, and budgets all remain unchanged). However, instead of sending queries using the CLI, the application should run as a web service that we can send requests to and receive responses:
+In this stage, you'll refactor your app to use cloud services instead of the local setup we've been using so far. Note that it is possible to move our entire setup to a public cloud, such as using AWS EC2 instances and Docker containers. However, to keep the setup simple, we will use managed services. We’ll use Qdrant Cloud, Redis Cloud, and Langfuse Cloud. For the Litellm proxy, we’ll use EC2 instances later. If you want, you can try experimenting with a cloud provider like [Render](https://render.com/deploy?repo=https://github.com/BerriAI/litellm).
+
+Once you’ve created accounts on those platforms ([Qdrant](https://cloud.qdrant.io/), [Redis](https://redis.io/cloud/), [Langfuse](https://cloud.langfuse.com/)) the next step is to set things up. For Qdrant, start by creating a free tier cluster:
+
+![Qdrant UI](../images/qdrant.png)
+
+Next, can generate an API key and note the endpoint URL you will use for the Qdrant client. Now that you have the cluster, you need to upload your data. When you run the application for the first time, the `embed_documents()` function will create the store for you. Alternatively, you can create a snapshot from your local installation and upload it via the cluster UI. Then, update your `embed_documents()` function to retain only the necessary parts:
 
 ```python
+collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
+if collection_exists:
+  qdrant_store = QdrantVectorStore.from_existing_collection(
+        url=os.environ["QDRANT_URL"],
+        api_key=os.environ["QDRANT_API_KEY"],
+        embedding=embeddings_model,
+        collection_name=collection_name,
+    )
 
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    return qdrant_store
 ```
 
-You should use the following Pydantic schema for the request:
+For Redis, all you need to do is create a database. Then, click “Connect” to see various ways to connect to the database:
+
+![Redis](../images/redis.png)
+
+One way is to use the database connection string that looks like this:
+
+```bash
+redis://<username>:<password>@<public_endpoint>:<port>/<database>
+```
+
+You can view it in full from the Redis CLI connection method (use database `0`). Then, use it in your code:
 
 ```python
-class QueryRequest(BaseModel):
-    user_input: str
-    user_id: str
-    session_id: str
+REDIS_URL = os.environ["REDIS_CONN_STRING"]
+
+def get_redis_history(session_id: str) -> BaseChatMessageHistory:
+    return RedisChatMessageHistory(session_id, redis_url=REDIS_URL, ttl=3600)
 ```
 
-This schema will be used to validate the incoming request. These parameters are required to identify the user and the session, helping the LLM provide personalized responses. Also, these parameters are useful for user history retrieval and usage tracking in LiteLLM. The user ID and session ID are collected by the main application, and the user input from the text input form. You don’t need to implement this logic.
+Using a database client, you can see the chat history in your Redis database. Finally, for Langfuse, all you need to do is create a new organization, project, and generate public and private keys. Then, set the `LANGFUSE_HOST` key to `https://cloud.langfuse.com`. You should now see traces in your Langfuse cloud instance:
 
-Another thing to note is that some aspects of the application will no longer be required. For example, you don't need the EndSession tool anymore. You can remove that, as well as the generation of goodbye messages. The LLM only needs one tool now, the `SmartphonesInfo` tool. Also, ensure you're building the vector store when that tool is called.
+![Langfuse](../images/langfuse.png)
 
 ### **Deliverables**
 
-In this task, your application should run as a web service that accepts POST requests and returns responses containing the LLM's recommendations. Therefore, your repo should contain the updated code that adds this functionality.
-
-### **Useful Resources**
-
-### **Topics**
-
-If you’re new to a topic, you might also want to go over the prerequisite topics.
-
-- [Overview of FastAPI](https://hyperskill.org/learn/step/52311).
-- [Introduction to Pydantic](https://hyperskill.org/learn/step/52212)
+At this point, your application should be using cloud providers for your vector and Redis databases, as well as Langfuse.

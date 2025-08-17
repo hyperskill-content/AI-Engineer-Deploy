@@ -1,4 +1,4 @@
-## Production-ready Docker Image
+## **Deployment to AWS**
 
 ## **Table of Contents**
 
@@ -6,85 +6,133 @@
 - [Recommended Development Steps](#recommended-development-steps)
 - [Deliverables](#deliverables)
 - [Useful Resources](#useful-resources)
+    - [Topics](#topics)
     - [Docs](#docs)
+    - [Other useful articles](#other-useful-articles)
 
-### Description
+### **Description**
 
-We are now preparing the application for the final stages of deployment to AWS EC2 instances. Since we are using the instance solely for this application, we may not need a Docker image. However, Docker is the industry-standard and highly recommended practice. With Docker, you ensure that your application can consistently run in any environment. This avoids the age-old issue, “it works on my machine”.
+With a production-ready Docker image built, let’s move it to production! In this final task, your task is to deploy it to the cloud. There are multiple ways we can do this on AWS. Other cloud providers have similar services, so once you understand how to do it on AWS, you’ll be ready to deploy on other platforms as well.
+
+Here, we will run the application on an AWS EC2 instance. In that instance, we will run the Docker Engine and use it to run the image. You can use a suitable container registry like [Amazon Container Registry (ECR)](https://aws.amazon.com/ecr/getting-started/) or [Docker Hub](https://hub.docker.com/)   to store the Docker image in a public repository. We will also explore more advanced deployment patterns for when your application needs to handle higher traffic and requires greater availability.
 
 ### **Recommended Development Steps**
 
-In this task, let's work on the Dockerfile to build the image. One key thing to ensure is that the image is production-ready and does not include unnecessary files. The first step to achieving that is by including a `.dockerignore` file to exclude unnecessary files (e.g.  `.git`, `__pycache__`, `.env`) to keep the build context small. It also avoids copying development artifacts into the image. These are typically the same files you’d include in your `.gitignore` file.
+To complete this task, you need an AWS account. Once you have an account, here are some security and other best practices to perform next:
 
-Next, ensure to pin specific package versions in your `requirements.txt` to ensure reproducibility. Also, use a minimal base image such as `python:3.13-slim`. However, remember to rebuild images regularly with updated base images to include security patches.
+- Set up a [zero-spend budget](https://docs.aws.amazon.com/cost-management/latest/userguide/budget-templates.html). This ensures that you’re immediately alerted in case you left some services running. (but it doesn’t stop services; you have to do that yourself)
+- Never use the root user account. Head over to AWS IAM service console and set up an IAM user with the `AdministratorAccess` policy. You will use this account for administrative actions.
+- Set up MFA for the root user. This can also be done from the AWS IAM service console.
+- You can also set up other users with minimal permissions for various tasks.
 
-Since we don’t want the resulting image to be too large, we need to be careful about how we build the image. Here are a few things you can do:
+Now that you have a non-root user, log out and log in as the IAM user. Then, generate access keys that you will use to authenticate the [AWS CLI](https://aws.amazon.com/cli/). You will use the AWS CLI to push images to Amazon ECR. However, if you used a different container registry, such as Docker Hub or Google Container Registry, you do not need the AWS CLI.
 
-1. Combine related commands and remove caches in the same step. For example:
+If you decide to use Amazon ECR, just create a public repository in the Amazon ECR service. Using a public repo ensures that you do not incur charges because private repos have a 500MB image size limit (and for us to access it).
 
-    ```bash
-    RUN apt-get update && \
-        rm -rf /var/lib/apt/lists/*
-    ```
+Next, you need to upload the container image to Amazon ECR (or the registry of choice). Since significant changes require rebuilding the image and uploading, ensure you have thoroughly tested the image and that it works as expected locally. Once you’re satisfied, check your Amazon ECR repository to find the necessary commands you need to push the image:
 
-2. Use multi-stage builds — since we have packages with compiled dependencies, you can use a builder stage and a smaller runtime stage. In the builder stage, you would install build tools (e.g `build-essential`, `libffi-dev`, `libssl-dev`). Then, create a virtual environment and install packages without caching:
+![AWS commands](../images/AWS.png)
 
-    ```bash
-    RUN pip install --no-cache-dir -r requirements.txt
-    ```
-
-   At this point, if you are not using a multi-stage build, you can remove all packages:
-
-    ```bash
-    RUN apt-get purge -y --auto-remove libffi-dev libssl-dev build-essential && \
-        apt-get clean && rm -rf /var/lib/apt/lists/*
-    ```
-
-   But if you are using a multi-stage build approach, you only need to copy the virtual environment you created:
-
-    ```bash
-    COPY --from=builder /opt/venv /opt/venv
-    ```
-
-
-This ensures only the needed packages are in the final image. The next thing you need to do is ensure that you’re following some recommended security best practices. For example, ensure that the application runs as a non-root user. You can do this by creating a user to run the app inside the container. Another thing is passing environment variables at runtime (ensure you’re accessing variables via `os.environ` in your code):
+For Docker Hub, you would use:
 
 ```bash
-docker run --env-file .env -p 8000:8000 custom-image:latest
+docker login
+docker build -t <image>:<tag> .
+docker tag <image>:<tag> <repo>/<image>:<tag>
+docker push <repo>/<image>:<tag>
 ```
 
-The final thing to consider is how your run the web server. In our code, we are running it with `uvicorn` as follows:
+### Using EC2 Instances
 
-```python
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-```
+Once your image is uploaded, the next step is to launch an AWS EC2 instance where you’ll run the container. Here are some key configs for the instance:
 
-In our production environment, the recommended way is to use Gunicorn’s process manager. Therefore, you can set your image’s entry point as follows:
+- Use a Linux-based image such as Ubuntu, Debian, or Amazon Linux.
+- For instance, type, select a free-tier eligible instance type, which can be `t2.micro` or `t3.micro`, depending on the selected region.
+- Create a new key pair — you’ll use this to `SSH` into the instance.
+- For Network settings, check options to enable SSH, HTTPS, and HTTP traffic for the new security group. This will allow you to connect to the server via SSH and access the app via HTTP.
+- You can leave the other options as default.
+
+Wait for a few minutes for the instance to be launched and for [status checks](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/monitoring-system-instance-status-check.html) to pass. Then, head over to the `Connect` page and follow the instructions to connect via SSH or EC2 Instance Connect. For SSH, you may need to set up permissions for the key pair (if necessary). You will also find the command to connect to the instance (note that the public IP changes when the instance is restarted):
 
 ```bash
-CMD ["gunicorn",
-     "--worker-class", "uvicorn.workers.UvicornWorker",
-     "--bind", "0.0.0.0:8000",
-     "--workers", "2",        
-     "--preload",      
-     "main:app"
-]
+ssh -i /path/to/your-key.pem <username>@<YOUR_EC2_PUBLIC_IP>
 ```
 
-This `CMD` tells Docker to start Gunicorn using Uvicorn’s async worker class (max 4 workers), binding the FastAPI app (`main:app`) to all network interfaces on port 8000 and preloading the application code before forking worker processes for faster spin-up. Now, you can build the image:
+Once you connect to the instance, you need to install and run the Docker Engine. You may have been using Docker Desktop so far, but in production environments, you use the Docker Engine. The [installation instructions](https://docs.docker.com/engine/install/) vary depending on the OS image you selected earlier. You might also need to perform some [post-installation](https://docs.docker.com/engine/install/linux-postinstall/) steps to avoid running Docker with `sudo`:
 
 ```bash
-docker build -t hypersite:latest .
+sudo groupadd docker # create a new group (it may already exist)
+sudo usermod -aG docker $USER # and the currently logged in user to the group
+newgrp docker # to activate changes but you may need to restart the VM if you still can't run docker without sudo
 ```
 
-Great job. Now, your image is production-ready. At this point, run the image to ensure that it is working as expected. For our application, the image should be around ~600-700MB.
+Great, with Docker installed, you would then pull the image from your repository and run it. Alternatively, you can clone your repo and build the image as you did locally. As for the `.env` file, just create one using a text editor like `nano` or `vim` and copy your variables there. Then, run the image using the following command:
+
+```bash
+docker run \
+  -d \ # remove this to see the application startup progress because it may take a while 
+  -p 80:8000 \
+  --name hypersite \
+  --restart always \
+  --env-file ./.env \
+  <image_name> # e.g. public.ecr.aws/q9c7y1p3/deployment:latest
+```
+
+This command starts your container in the background (using `-d`), maps port 80 on the host to port 8000 in the container (`-p 80:8000`), and gives it the name `hypersite` (`--name hypersite`).  `--restart always` sets the restart policy to `always`, so Docker will automatically restart the container if it crashes or if the daemon restarts, and loads environment variables from the file `./.env` (`--env-file ./.env`). The <image_name> is your container registry image.
+
+That’s it! The application should now be accessible via the public IP from anywhere in the world. You can try viewing the API docs here:
+
+```bash
+http://<ec2-public-ip>/docs
+```
+
+As an optional step, try to run the LiteLLM proxy using a dedicated AWS EC2 instance. You can run it exactly as we did before. That involved creating the `config.yaml` file and modifying the `docker-compose.yml` file. You can also try using the [CloudFormation Stack or EKS](https://docs.litellm.ai/docs/proxy/deploy#platform-specific-guide), because a single instance may not be enough to run both the proxy and database servers.
+
+Once deployed, you would then create users and virtual keys for the new LiteLLM proxy instance as we did before. Once you are done, you can now use the following base URL (you can use this from your local environment as well):
+
+```markdown
+http://<ec2-public-ip>:4000
+```
+
+### Other Alternatives
+
+Deploying to a single EC2 instance is a great start. However, it may not be ideal when you start receiving many requests. Here are more advanced, production-grade patterns for when you need to scale.
+
+1. **EC2 behind a Load Balancer**
+
+An Application Load Balancer (ALB) distributes incoming traffic across multiple EC2 instances, each running a copy of your container. It offers high availability (survives an instance failure), horizontal scalability (add more instances to handle more traffic), and easy-to-manage SSL certificates.
+
+2. **Serverless with AWS Lambda and API Gateway**
+
+Your FastAPI application is packaged into a special format (using a tool like Mangum) and deployed as an AWS Lambda function. An API Gateway endpoint is created to trigger the function via HTTP requests. This approach is fully managed (no servers to patch or maintain), pay-per-use pricing, automatic scaling. Very useful for APIs with infrequent or unpredictable traffic, or for teams that want to minimize infrastructure management.
+
+3. **Container Orchestration with ECS or EKS**
+
+Use a container orchestrator like   Amazon ECS   (Elastic Container Service) or   EKS   (Elastic Kubernetes Service) to manage your container deployments. With   AWS ****Fargate   as a launch type for ECS, you don't even need to manage the underlying EC2 instances.
+
+This approach is the most robust and flexible option. It manages deployments, scaling, service discovery, and container health automatically. It is useful for complex applications, microservices architectures, and high-traffic environments that require robust, automated operational control.
 
 ### **Deliverables**
 
-At this point, you should have a `Dockerfile` that can be used to build a production-ready image to run your application. Ensure you’re ignoring unnecessary files, optimizing image size, following security best practices, and using the right production environment `CMD`. You must also ensure that the image works well in your local environment.
+You have completed this task when:
+
+1. Your Docker image is stored in a public container registry.
+2. An EC2 instance is running and configured with a security group allowing web traffic.
+3. The Docker container is running on the EC2 instance and is accessible to the public internet via the instance's IP address.
+4. The web app is accessible from the internet and we can send requests to it.
 
 ### **Useful Resources**
 
+### **Topics**
+If you're new to AWS, you can start with the following topics on Hyperskill and their prerequisites:
+- [The AWS Management Console](https://hyperskill.org/learn/step/39474)
+- [EC2 Basics](https://hyperskill.org/learn/step/41843)
+- [Launching an EC2 Instance](https://hyperskill.org/learn/step/45458)
+- [Connecting to an EC2 Instance](https://hyperskill.org/learn/step/47674)
+- [Introduction to Serverless Computing](https://hyperskill.org/learn/step/47673)
 ### **Docs**
-- [Docker optimization](https://docs.docker.com/build-cloud/optimization/)
+
+- [AWS Free Tier](https://aws.amazon.com/free/)
+- [Getting started WITH Amazon ECR](https://aws.amazon.com/ecr/getting-started/)
+- [Deploying a FastAPI App to AWS Lambda](https://mangum.fastapiexpert.com/)
+- [Build and push your first image](https://docs.docker.com/get-started/introduction/build-and-push-first-image/)

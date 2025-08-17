@@ -72,13 +72,6 @@ git push origin feature/add-fastapi-endpoint
     - If we find issues, we will leave comments on specific lines.
     - If everything looks good, we will approve the PR.
 
-### Deliverables
-
-GitHub repo with:
-
-- Final code solution, `Dockerfile`, and other files in the `main` branch.
-- At least three merged pull requests.
-
 ## **Best Practices**
 - Use meaningful commit messages.
 - Use branches for features, bug fixes, or experiments.

@@ -1,65 +1,90 @@
-## **Refactoring to Cloud Services**
+## Production-ready Docker Image
 
 ## **Table of Contents**
 
 - [Description](#description)
 - [Recommended Development Steps](#recommended-development-steps)
 - [Deliverables](#deliverables)
+- [Useful Resources](#useful-resources)
+    - [Docs](#docs)
 
-### **Description**
+### Description
 
-So far,your application has been communicating locally with various services and components—your vector and Redis databases, as well as Langfuse. Since you're doing everything locally in your development environment, communication is easy — your app can just access them over your local network. However, moving to a production environment, this may not be possible (unless you host them in your on-prem servers). Additionally, you need to handle aspects such as scaling and fault tolerance as you'll, hopefully, be receiving a lot of traffic from customers.
-
-If you don't have the infrastructure to run services locally, you would use cloud services, which come in many flavors. You can use a public cloud like AWS or Azure and create instances for your infrastructure. This gives you the most control, but the setup process and maintenance can be complex.
-
-On the other hand, you can utilize SaaS (Software as a Service) and PaaS (Platform as a Service) solutions. These allow you to access cloud services without doing much of the heavy lifting. Your PaaS provider will handle managing the infrastructure, upgrades, scaling, patches, and other tasks.  While these cloud models are easy to set up, you have no control over the platform. This may not be ideal for data-sensitive workloads.
+We are now preparing the application for the final stages of deployment to AWS EC2 instances. Since we are using the instance solely for this application, we may not need a Docker image. However, Docker is the industry-standard and highly recommended practice. With Docker, you ensure that your application can consistently run in any environment. This avoids the age-old issue, “it works on my machine”.
 
 ### **Recommended Development Steps**
 
-In this stage, you'll refactor your app to use cloud services instead of the local setup we've been using so far. Note that it is possible to move our entire setup to a public cloud, such as using AWS EC2 instances and Docker containers. However, to keep the setup simple, we will use managed services. We’ll use Qdrant Cloud, Redis Cloud, and Langfuse Cloud. For the Litellm proxy, we’ll use EC2 instances later. If you want, you can try experimenting with a cloud provider like [Render](https://render.com/deploy?repo=https://github.com/BerriAI/litellm).
+In this task, let's work on the Dockerfile to build the image. One key thing to ensure is that the image is production-ready and does not include unnecessary files. The first step to achieving that is by including a `.dockerignore` file to exclude unnecessary files (e.g.  `.git`, `__pycache__`, `.env`) to keep the build context small. It also avoids copying development artifacts into the image. These are typically the same files you’d include in your `.gitignore` file.
 
-Once you’ve created accounts on those platforms ([Qdrant](https://cloud.qdrant.io/), [Redis](https://redis.io/cloud/), [Langfuse](https://cloud.langfuse.com/)) the next step is to set things up. For Qdrant, start by creating a free tier cluster:
+Next, ensure to pin specific package versions in your `requirements.txt` to ensure reproducibility. Also, use a minimal base image such as `python:3.13-slim`. However, remember to rebuild images regularly with updated base images to include security patches.
 
-![Qdrant UI](../images/qdrant.png)
+Since we don’t want the resulting image to be too large, we need to be careful about how we build the image. Here are a few things you can do:
 
-Next, can generate an API key and note the endpoint URL you will use for the Qdrant client. Now that you have the cluster, you need to upload your data. When you run the application for the first time, the `embed_documents()` function will create the store for you. Alternatively, you can create a snapshot from your local installation and upload it via the cluster UI. Then, update your `embed_documents()` function to retain only the necessary parts:
+1. Combine related commands and remove caches in the same step. For example:
 
-```python
-collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
-if collection_exists:
-  qdrant_store = QdrantVectorStore.from_existing_collection(
-        url=os.environ["QDRANT_URL"],
-        api_key=os.environ["QDRANT_API_KEY"],
-        embedding=embeddings_model,
-        collection_name=collection_name,
-    )
+    ```bash
+    RUN apt-get update && \
+        rm -rf /var/lib/apt/lists/*
+    ```
 
-    return qdrant_store
-```
+2. Use multi-stage builds — since we have packages with compiled dependencies, you can use a builder stage and a smaller runtime stage. In the builder stage, you would install build tools (e.g `build-essential`, `libffi-dev`, `libssl-dev`). Then, create a virtual environment and install packages without caching:
 
-For Redis, all you need to do is create a database. Then, click “Connect” to see various ways to connect to the database:
+    ```bash
+    RUN pip install --no-cache-dir -r requirements.txt
+    ```
 
-![Redis](../images/redis.png)
+   At this point, if you are not using a multi-stage build, you can remove all packages:
 
-One way is to use the database connection string that looks like this:
+    ```bash
+    RUN apt-get purge -y --auto-remove libffi-dev libssl-dev build-essential && \
+        apt-get clean && rm -rf /var/lib/apt/lists/*
+    ```
+
+   But if you are using a multi-stage build approach, you only need to copy the virtual environment you created:
+
+    ```bash
+    COPY --from=builder /opt/venv /opt/venv
+    ```
+
+
+This ensures only the needed packages are in the final image. The next thing you need to do is ensure that you’re following some recommended security best practices. For example, ensure that the application runs as a non-root user. You can do this by creating a user to run the app inside the container. Another thing is passing environment variables at runtime (ensure you’re accessing variables via `os.environ` in your code):
 
 ```bash
-redis://<username>:<password>@<public_endpoint>:<port>/<database>
+docker run --env-file .env -p 8000:8000 custom-image:latest
 ```
 
-You can view it in full from the Redis CLI connection method (use database `0`). Then, use it in your code:
+The final thing to consider is how your run the web server. In our code, we are running it with `uvicorn` as follows:
 
 ```python
-REDIS_URL = os.environ["REDIS_CONN_STRING"]
-
-def get_redis_history(session_id: str) -> BaseChatMessageHistory:
-    return RedisChatMessageHistory(session_id, redis_url=REDIS_URL, ttl=3600)
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
 ```
 
-Using a database client, you can see the chat history in your Redis database. Finally, for Langfuse, all you need to do is create a new organization, project, and generate public and private keys. Then, set the `LANGFUSE_HOST` key to `https://cloud.langfuse.com`. You should now see traces in your Langfuse cloud instance:
+In our production environment, the recommended way is to use Gunicorn’s process manager. Therefore, you can set your image’s entry point as follows:
 
-![Langfuse](../images/langfuse.png)
+```bash
+CMD ["gunicorn",
+     "--worker-class", "uvicorn.workers.UvicornWorker",
+     "--bind", "0.0.0.0:8000",
+     "--workers", "2",        
+     "--preload",      
+     "main:app"
+]
+```
+
+This `CMD` tells Docker to start Gunicorn using Uvicorn’s async worker class (max 4 workers), binding the FastAPI app (`main:app`) to all network interfaces on port 8000 and preloading the application code before forking worker processes for faster spin-up. Now, you can build the image:
+
+```bash
+docker build -t hypersite:latest .
+```
+
+Great job. Now, your image is production-ready. At this point, run the image to ensure that it is working as expected. For our application, the image should be around ~600-700MB.
 
 ### **Deliverables**
 
-At this point, your application should be using cloud providers for your vector and Redis databases, as well as Langfuse.
+At this point, you should have a `Dockerfile` that can be used to build a production-ready image to run your application. Ensure you’re ignoring unnecessary files, optimizing image size, following security best practices, and using the right production environment `CMD`. You must also ensure that the image works well in your local environment.
+
+### **Useful Resources**
+
+### **Docs**
+- [Docker optimization](https://docs.docker.com/build-cloud/optimization/)
