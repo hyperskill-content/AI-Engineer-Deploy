@@ -12,17 +12,23 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
-from langchain_redis import RedisChatMessageHistory
-from langfuse import Langfuse
-from langfuse.callback import CallbackHandler
-from langfuse.decorators import observe, langfuse_context
+# from langchain_redis import RedisChatMessageHistory
+from langchain_community.chat_message_histories import RedisChatMessageHistory
+# from langfuse import Langfuse
+# from langfuse.callback import CallbackHandler
+from langfuse.langchain import CallbackHandler
+# from langfuse.decorators import observe, langfuse_context
+from langfuse import observe, get_client
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 from langchain_core.messages import trim_messages
-from nemoguardrails import RailsConfig
-from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
+# from nemoguardrails import RailsConfig
+# from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 from langchain_core.globals import set_debug
 import logging
+from fastapi import FastAPI
+from pydantic import BaseModel
+
 
 logging.getLogger("nemoguardrails").setLevel(logging.ERROR)
 logging.getLogger("nemoguardrails.actions").setLevel(logging.ERROR)
@@ -37,7 +43,7 @@ total_user_budget = 0.0010000
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
 
 llm = ChatOpenAI(
-    model=os.getenv("OPENAI_MODEL"),
+    model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
     base_url=os.getenv("OPENAI_BASE_URL"),
     api_key=os.getenv("OPENAI_API_KEY")
 )
@@ -51,28 +57,57 @@ embeddings_model = OpenAIEmbeddings(
 )
 
 # Initialize the callback handler for Langfuse
-langfuse_handler = CallbackHandler(
-    public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-    secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-    host=os.getenv("LANGFUSE_HOST"),
-    trace_name="ai-response",
-    user_id=user_id,
-)
+# langfuse_handler = CallbackHandler(
+#     public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+#     secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+#     host=os.getenv("LANGFUSE_HOST"),
+#     trace_name="ai-response",
+#     user_id=user_id,
+# )
+langfuse_handler = CallbackHandler()
 
-langfuse_client = Langfuse(
-    public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-    secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-    host=os.getenv("LANGFUSE_HOST"),
-)
+# langfuse_client = Langfuse(
+#     public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+#     secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+#     host=os.getenv("LANGFUSE_HOST"),
+# )
 
-config = RailsConfig.from_path("./config")
-guardrails = RunnableRails(config, input_key="user_input")
+langfuse_client = get_client()
+
+# config = RailsConfig.from_path("./config")
+# guardrails = RunnableRails(config, input_key="user_input")
 
 def check_budget(current_usage: float) -> bool:
     if current_usage < total_user_budget:
         return True
     else:
         return False
+
+# ---------------------------
+# FastAPI
+# ---------------------------
+app = FastAPI()
+
+product_db = None
+
+@app.on_event("startup")
+def startup_event():
+    global product_db
+    product_db = embed_documents("smartphones.json")
+
+class QueryRequest(BaseModel):
+    user_input: str
+    user_id: str
+    session_id: str
+
+@app.post("/ask")
+async def ask(request: QueryRequest):
+    response = run_chat(
+        user_input=request.user_input,
+        user_id=request.user_id,
+        session_id=request.session_id
+    )
+    return response
 
 
 # ---------------------------
@@ -201,7 +236,7 @@ def end_session_tool(session_status: str):
     :returns
         Exits the system after printing the goodbye message.
     """
-    langfuse_handler = langfuse_context.get_current_langchain_handler()
+    # langfuse_handler = langfuse_context.get_current_langchain_handler()
 
     langfuse_goodbye_prompt = langfuse_client.get_prompt("goodbye-prompt")
     langchain_goodbye_prompt = ChatPromptTemplate.from_messages(
@@ -214,7 +249,13 @@ def end_session_tool(session_status: str):
 
         goodbye_chain = langchain_goodbye_prompt | llm
         goodbye_message = goodbye_chain.invoke({"user_id": user_id},
-                                               config={"callbacks": [langfuse_handler], "run_name": "goodbye"})
+                                               config={"callbacks": [langfuse_handler],
+                                                       "run_name": "goodbye",
+                                                       "metadata": {
+                                                           "user_id": user_id,
+                                                           "session_id": user_id,
+                                                       },
+                                                       })
 
         return goodbye_message
     except Exception as e:
@@ -252,15 +293,121 @@ def budget_exceeded():
 
 
 # ---------------------------
+# Main Conversation Loop -> now, run chat conversation loop
+# ---------------------------
+def run_chat(user_input: str, user_id: str, session_id: str) -> str:
+    # langfuse_context.update_current_trace(
+    #     session_id=session_id,
+    #     user_id=user_id
+    # )
+    # langfuse_handler = langfuse_context.get_current_langchain_handler()
+
+    tools = [smartphone_info_tool, end_session_tool]
+    llm_with_tools = llm.bind_tools(tools)
+
+    def get_redis_history(session_id: str) -> BaseChatMessageHistory:
+        return RedisChatMessageHistory(session_id=session_id, url=REDIS_URL, ttl=120)
+        # return RedisChatMessageHistory(session_id, redis_url=REDIS_URL, ttl=120)
+
+    trimmer = trim_messages(
+        strategy="last",
+        token_counter=llm,
+        max_tokens=1000,
+        start_on="human",
+        end_on=("human", "tool"),
+        include_system=True,
+    )
+
+    # Context Prompt
+    langfuse_context_prompt = langfuse_client.get_prompt("context-prompt", label="production")
+    langchain_context_prompt = ChatPromptTemplate.from_messages(
+        [
+            langfuse_context_prompt.get_langchain_prompt()[0],
+            MessagesPlaceholder(variable_name="chat_history"),
+            langfuse_context_prompt.get_langchain_prompt()[1]
+        ]
+    )
+
+    context_chain = langchain_context_prompt | trimmer | llm_with_tools | generate_context
+
+    context_chain_with_history = RunnableWithMessageHistory(
+        context_chain,
+        get_redis_history,
+        input_messages_key="user_input",
+        history_messages_key="chat_history"
+    )
+
+    # context_chain_with_history_and_rails = guardrails | context_chain_with_history
+    context_chain_with_history_and_rails = context_chain_with_history
+
+    # Review Prompt
+    langfuse_review_prompt = langfuse_client.get_prompt("review-prompt")
+    langchain_review_prompt = ChatPromptTemplate.from_messages(
+        [
+            langfuse_review_prompt.get_langchain_prompt()[0],
+            MessagesPlaceholder(variable_name="chat_history"),
+            langfuse_review_prompt.get_langchain_prompt()[1]
+        ]
+    )
+
+    review_chain = langchain_review_prompt | llm
+
+    review_chain_with_history = RunnableWithMessageHistory(
+        review_chain,
+        get_redis_history,
+        input_messages_key="user_input",
+        history_messages_key="chat_history"
+    )
+
+    try:
+        context = context_chain_with_history_and_rails.invoke(
+            {"user_input": user_input},
+            config={
+                "configurable": {"session_id": session_id},
+                "callbacks": [langfuse_handler],
+                "run_name": "context",
+                "metadata": {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                },
+            }
+        )
+
+        context_result = context.get("output") if isinstance(context, dict) else context
+
+        if context_result and context_result.strip().lower() == "i'm sorry, i can't respond to that.":
+            return context_result
+
+        final_response = review_chain_with_history.invoke(
+            {"user_input": user_input, "user_id": user_id, "context": context},
+            config={
+                "configurable": {"session_id": session_id},
+                "callbacks": [langfuse_handler],
+                "run_name": "final_response",
+                "metadata": {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                },
+            }
+        )
+
+        return final_response.content
+
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+# original version
+# ---------------------------
 # Main Conversation Loop
 # ---------------------------
 @observe(name="ai-response")
 def main():
-    langfuse_context.update_current_trace(
-        session_id=session_name,
-        user_id=user_id
-    )
-    langfuse_handler = langfuse_context.get_current_langchain_handler()
+    # langfuse_context.update_current_trace(
+    #     session_id=session_name,
+    #     user_id=user_id
+    # )
+    # langfuse_handler = langfuse_context.get_current_langchain_handler()
 
     # List of available tools
     tools = [smartphone_info_tool, end_session_tool]
@@ -269,7 +416,7 @@ def main():
     llm_with_tools = llm.bind_tools(tools)
 
     def get_redis_history(session_id: str) -> BaseChatMessageHistory:
-        return RedisChatMessageHistory(session_id, redis_url=REDIS_URL, ttl=120)
+        return RedisChatMessageHistory(session_id=session_id, url=REDIS_URL, ttl=120)
 
     trimmer = trim_messages(
         strategy="last",
@@ -296,7 +443,8 @@ def main():
         context_chain, get_redis_history, input_messages_key="user_input", history_messages_key="chat_history"
     )
 
-    context_chain_with_history_and_rails = guardrails | context_chain_with_history
+    # context_chain_with_history_and_rails = guardrails | context_chain_with_history
+    context_chain_with_history_and_rails = context_chain_with_history
 
     langfuse_review_prompt = langfuse_client.get_prompt("review-prompt")
     langchain_review_prompt = ChatPromptTemplate.from_messages(
@@ -344,7 +492,12 @@ def main():
                     {"user_input": user_input},
                     config={
                         "configurable": {"session_id": user_id},
-                        "callbacks": [langfuse_handler], "run_name": "context"
+                        "callbacks": [langfuse_handler],
+                        "run_name": "context",
+                        "metadata": {
+                            "user_id": user_id,
+                            "session_id": user_id,
+                        },
                     }
                 )
 
@@ -356,7 +509,12 @@ def main():
                         {"user_input": user_input, "user_id": user_id, "context": context},
                         config={
                             "configurable": {"session_id": user_id},
-                            "callbacks": [langfuse_handler], "run_name": "final_response"
+                            "callbacks": [langfuse_handler],
+                            "run_name": "final_response",
+                            "metadata": {
+                                "user_id": user_id,
+                                "session_id": user_id,
+                            },
                         }
                     )
                     print(f"System: {final_response.content}")
