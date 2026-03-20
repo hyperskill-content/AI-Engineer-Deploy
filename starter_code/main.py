@@ -40,7 +40,8 @@ dotenv.load_dotenv()
 session_name = f"session-{uuid.uuid4().hex[:8]}"
 user_id = "HyperUser"
 total_user_budget = 0.0010000
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+REDIS_URL = os.getenv("REDIS_CONN_STRING", "redis://localhost:6380/0")
+print("Using Redis URL:", REDIS_URL.split("@")[-1])
 
 llm = ChatOpenAI(
     model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
@@ -124,9 +125,8 @@ def embed_documents(json_path: str):
         Chroma: A Chroma vector store built from the smartphone documents,
                 or an empty list if an error occurs.
     """
-
     try:
-        with open(json_path, "r") as f:
+        with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
         print(f"Error: The file {json_path} was not found.")
@@ -140,7 +140,6 @@ def embed_documents(json_path: str):
 
     documents = []
     for entry in data:
-        # Build a readable content string from the JSON entry
         content = (
             f"Model: {entry.get('model', '')}\n"
             f"Price: {entry.get('price', '')}\n"
@@ -159,36 +158,37 @@ def embed_documents(json_path: str):
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+
+        qdrant_client = QdrantClient(
+            url=os.environ["QDRANT_CLUSTER_ENDPOINT"],
+            api_key=os.environ["QDRANT_API_KEY"],
+            timeout=60,
+        )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
+
         if not collection_exists:
             qdrant_client.create_collection(
                 collection_name=collection_name,
-                vectors_config=VectorParams(
-                    size=1536,
-                    distance=Distance.COSINE,
-                ),
+                vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
             )
 
-            qdrant_store = QdrantVectorStore(
-                client=qdrant_client,
-                collection_name=collection_name,
-                embedding=embeddings_model
-            )
+        qdrant_store = QdrantVectorStore(
+            client=qdrant_client,
+            collection_name=collection_name,
+            embedding=embeddings_model,
+        )
 
+        count_result = qdrant_client.count(
+            collection_name=collection_name,
+            exact=True,
+        )
+
+        if count_result.count == 0:
+            print("Collection exists but is empty. Uploading documents now...")
             qdrant_store.add_documents(documents=documents)
 
-            return qdrant_store
-
-        # no need to create a vector store every time
-        else:
-            qdrant_store = QdrantVectorStore.from_existing_collection(
-                embedding=embeddings_model,
-                collection_name=collection_name,
-            )
-
-            return qdrant_store
+        return qdrant_store
 
     except Exception as e:
         print(f"Error initializing the vector store: {e}")
@@ -296,81 +296,64 @@ def budget_exceeded():
 # Main Conversation Loop -> now, run chat conversation loop
 # ---------------------------
 def run_chat(user_input: str, user_id: str, session_id: str) -> str:
-    # langfuse_context.update_current_trace(
-    #     session_id=session_id,
-    #     user_id=user_id
-    # )
-    # langfuse_handler = langfuse_context.get_current_langchain_handler()
-
-    tools = [smartphone_info_tool, end_session_tool]
-    llm_with_tools = llm.bind_tools(tools)
-
-    def get_redis_history(session_id: str) -> BaseChatMessageHistory:
-        return RedisChatMessageHistory(session_id=session_id, url=REDIS_URL, ttl=120)
-        # return RedisChatMessageHistory(session_id, redis_url=REDIS_URL, ttl=120)
-
-    trimmer = trim_messages(
-        strategy="last",
-        token_counter=llm,
-        max_tokens=1000,
-        start_on="human",
-        end_on=("human", "tool"),
-        include_system=True,
-    )
-
-    # Context Prompt
-    langfuse_context_prompt = langfuse_client.get_prompt("context-prompt", label="production")
-    langchain_context_prompt = ChatPromptTemplate.from_messages(
-        [
-            langfuse_context_prompt.get_langchain_prompt()[0],
-            MessagesPlaceholder(variable_name="chat_history"),
-            langfuse_context_prompt.get_langchain_prompt()[1]
-        ]
-    )
-
-    context_chain = langchain_context_prompt | trimmer | llm_with_tools | generate_context
-
-    context_chain_with_history = RunnableWithMessageHistory(
-        context_chain,
-        get_redis_history,
-        input_messages_key="user_input",
-        history_messages_key="chat_history"
-    )
-
-    # context_chain_with_history_and_rails = guardrails | context_chain_with_history
-    context_chain_with_history_and_rails = context_chain_with_history
-
-    # Review Prompt
-    langfuse_review_prompt = langfuse_client.get_prompt("review-prompt")
-    langchain_review_prompt = ChatPromptTemplate.from_messages(
-        [
-            langfuse_review_prompt.get_langchain_prompt()[0],
-            MessagesPlaceholder(variable_name="chat_history"),
-            langfuse_review_prompt.get_langchain_prompt()[1]
-        ]
-    )
-
-    review_chain = langchain_review_prompt | llm
-
-    review_chain_with_history = RunnableWithMessageHistory(
-        review_chain,
-        get_redis_history,
-        input_messages_key="user_input",
-        history_messages_key="chat_history"
-    )
-
     try:
-        context = context_chain_with_history_and_rails.invoke(
+        tools = [smartphone_info_tool, end_session_tool]
+        llm_with_tools = llm.bind_tools(tools)
+
+        def get_redis_history(session_id: str) -> BaseChatMessageHistory:
+            return RedisChatMessageHistory(session_id=session_id, url=REDIS_URL, ttl=3600)
+
+        trimmer = trim_messages(
+            strategy="last",
+            token_counter=llm,
+            max_tokens=1000,
+            start_on="human",
+            end_on=("human", "tool"),
+            include_system=True,
+        )
+
+        langfuse_context_prompt = langfuse_client.get_prompt("context-prompt", label="production")
+        langchain_context_prompt = ChatPromptTemplate.from_messages(
+            [
+                langfuse_context_prompt.get_langchain_prompt()[0],
+                MessagesPlaceholder(variable_name="chat_history"),
+                langfuse_context_prompt.get_langchain_prompt()[1]
+            ]
+        )
+
+        context_chain = langchain_context_prompt | trimmer | llm_with_tools | generate_context
+
+        context_chain_with_history = RunnableWithMessageHistory(
+            context_chain,
+            get_redis_history,
+            input_messages_key="user_input",
+            history_messages_key="chat_history"
+        )
+
+        review_prompt = langfuse_client.get_prompt("review-prompt")
+        langchain_review_prompt = ChatPromptTemplate.from_messages(
+            [
+                review_prompt.get_langchain_prompt()[0],
+                MessagesPlaceholder(variable_name="chat_history"),
+                review_prompt.get_langchain_prompt()[1]
+            ]
+        )
+
+        review_chain = langchain_review_prompt | llm
+        review_chain_with_history = RunnableWithMessageHistory(
+            review_chain,
+            get_redis_history,
+            input_messages_key="user_input",
+            history_messages_key="chat_history"
+        )
+
+        context = context_chain_with_history.invoke(
             {"user_input": user_input},
             config={
                 "configurable": {"session_id": session_id},
                 "callbacks": [langfuse_handler],
                 "run_name": "context",
-                "metadata": {
-                    "user_id": user_id,
-                    "session_id": session_id,
-                },
-            }
+            },
         )
 
         context_result = context.get("output") if isinstance(context, dict) else context
@@ -384,17 +367,13 @@ def run_chat(user_input: str, user_id: str, session_id: str) -> str:
                 "configurable": {"session_id": session_id},
                 "callbacks": [langfuse_handler],
                 "run_name": "final_response",
-                "metadata": {
-                    "user_id": user_id,
-                    "session_id": session_id,
-                },
-            }
+            },
         )
 
         return final_response.content
 
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {e}"
 
 
 # original version
@@ -416,7 +395,7 @@ def main():
     llm_with_tools = llm.bind_tools(tools)
 
     def get_redis_history(session_id: str) -> BaseChatMessageHistory:
-        return RedisChatMessageHistory(session_id=session_id, url=REDIS_URL, ttl=120)
+        return RedisChatMessageHistory(session_id=session_id, url=REDIS_URL, ttl=3600)
 
     trimmer = trim_messages(
         strategy="last",
@@ -536,4 +515,4 @@ def main():
 if __name__ == "__main__":
     # Build the product database vector store
     product_db = embed_documents("smartphones.json")
-    main()
+    # main()
