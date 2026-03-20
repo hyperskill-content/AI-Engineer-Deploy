@@ -1,0 +1,13 @@
+langchain>=0.3.0,<1.0.0
+langchain-core>=0.3.0,<1.0.0
+langchain-openai>=0.1.0
+langchain-community>=0.2.5,<2.0.0
+langchain-qdrant
+langchain-redis
+python-dotenv
+langfuse==2.60.8
+qdrant-client
+requests
+nemoguardrails>=0.20.0,<1.0.0
+backoff
+pyyaml
