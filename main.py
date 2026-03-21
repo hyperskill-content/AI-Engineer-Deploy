@@ -36,7 +36,7 @@ dotenv.load_dotenv()
 session_name = f"session-{uuid.uuid4().hex[:8]}"
 user_id = "HyperUser"
 total_user_budget = 0.0010000
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+REDIS_URL = os.getenv("REDIS_CONNECTION_STRING")
 
 llm = ChatOpenAI(
     model=os.getenv("OPENAI_MODEL"),
@@ -136,7 +136,11 @@ def embed_documents(json_path: str):
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+        qdrant_client = QdrantClient(
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY"),
+            check_compatibility=False
+        )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
         if not collection_exists:
@@ -151,7 +155,7 @@ def embed_documents(json_path: str):
             qdrant_store = QdrantVectorStore(
                 client=qdrant_client,
                 collection_name=collection_name,
-                embedding=embeddings_model
+                embedding=embeddings_model,
             )
 
             qdrant_store.add_documents(documents=documents)
@@ -160,9 +164,10 @@ def embed_documents(json_path: str):
 
         # no need to create a vector store every time
         else:
-            qdrant_store = QdrantVectorStore.from_existing_collection(
-                embedding=embeddings_model,
+            qdrant_store = QdrantVectorStore(
+                client=qdrant_client,
                 collection_name=collection_name,
+                embedding=embeddings_model,
             )
 
             return qdrant_store
