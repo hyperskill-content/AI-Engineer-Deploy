@@ -1,34 +1,28 @@
 import json
+# from nemoguardrails import RailsConfig
+# from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
+import logging
 import os
 import sys
 import uuid
 from datetime import datetime, timedelta
 
 import dotenv
+from fastapi import FastAPI
+from langchain_community.chat_message_histories import RedisChatMessageHistory
 from langchain_community.docstore.document import Document
 from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.messages import trim_messages
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
-# from langchain_redis import RedisChatMessageHistory
-from langchain_community.chat_message_histories import RedisChatMessageHistory
-# from langfuse import Langfuse
-# from langfuse.callback import CallbackHandler
-from langfuse.langchain import CallbackHandler
-# from langfuse.decorators import observe, langfuse_context
 from langfuse import observe, get_client
+from langfuse.langchain import CallbackHandler
+from pydantic import BaseModel
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
-from langchain_core.messages import trim_messages
-# from nemoguardrails import RailsConfig
-# from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
-from langchain_core.globals import set_debug
-import logging
-from fastapi import FastAPI
-from pydantic import BaseModel
-
 
 logging.getLogger("nemoguardrails").setLevel(logging.ERROR)
 logging.getLogger("nemoguardrails.actions").setLevel(logging.ERROR)
@@ -40,43 +34,27 @@ dotenv.load_dotenv()
 session_name = f"session-{uuid.uuid4().hex[:8]}"
 user_id = "HyperUser"
 total_user_budget = 0.0010000
-REDIS_URL = os.getenv("REDIS_CONN_STRING", "redis://localhost:6380/0")
+REDIS_URL = os.environ.get("REDIS_CONN_STRING", "redis://localhost:6380/0")
 print("Using Redis URL:", REDIS_URL.split("@")[-1])
 
 llm = ChatOpenAI(
-    model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-    base_url=os.getenv("OPENAI_BASE_URL"),
-    api_key=os.getenv("OPENAI_API_KEY")
+    model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+    base_url=os.environ.get("OPENAI_BASE_URL"),
+    api_key=os.environ.get("OPENAI_API_KEY")
 )
 
 # Initialize the embeddings model with OpenAI API credentials
 embeddings_model = OpenAIEmbeddings(
     model="text-embedding-ada-002",
-    base_url=os.getenv("OPENAI_BASE_URL"),
-    api_key=os.getenv("OPENAI_API_KEY"),
+    base_url=os.environ.get("OPENAI_BASE_URL"),
+    api_key=os.environ.get("OPENAI_API_KEY"),
     show_progress_bar=True,
 )
 
-# Initialize the callback handler for Langfuse
-# langfuse_handler = CallbackHandler(
-#     public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-#     secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-#     host=os.getenv("LANGFUSE_HOST"),
-#     trace_name="ai-response",
-#     user_id=user_id,
-# )
 langfuse_handler = CallbackHandler()
-
-# langfuse_client = Langfuse(
-#     public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-#     secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-#     host=os.getenv("LANGFUSE_HOST"),
-# )
 
 langfuse_client = get_client()
 
-# config = RailsConfig.from_path("./config")
-# guardrails = RunnableRails(config, input_key="user_input")
 
 def check_budget(current_usage: float) -> bool:
     if current_usage < total_user_budget:
@@ -511,7 +489,7 @@ def main():
         print(f"An unexpected error occurred in the main loop: {e}")
         sys.exit(1)
 
-
+# for local testing only, not relevant for docker
 if __name__ == "__main__":
     # Build the product database vector store
     product_db = embed_documents("smartphones.json")
