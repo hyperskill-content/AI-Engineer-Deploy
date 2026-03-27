@@ -1,12 +1,5 @@
-langchain-core
-langchain-openai
-langchain-community
-langchain_qdrant
-langchain_redis
-python-dotenv
-langfuse==2.60.8
-qdrant-client
-requests
-nemoguardrails
-backoff
-pyyaml
+langchain-openai==1.1.12
+langchain-qdrant==1.1.0
+langchain-redis==0.2.5
+langfuse==4.0.1
+nemoguardrails==0.21.0

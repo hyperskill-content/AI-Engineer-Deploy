@@ -14,8 +14,8 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_redis import RedisChatMessageHistory
 from langfuse import Langfuse
-from langfuse.callback import CallbackHandler
-from langfuse.decorators import observe, langfuse_context
+from langfuse.langchain import CallbackHandler
+from langfuse import observe, get_client, propagate_attributes
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 from langchain_core.messages import trim_messages
@@ -27,6 +27,7 @@ import logging
 logging.getLogger("nemoguardrails").setLevel(logging.ERROR)
 logging.getLogger("nemoguardrails.actions").setLevel(logging.ERROR)
 logging.getLogger("nemoguardrails.colang").setLevel(logging.ERROR)
+logging.getLogger("opentelemetry.context").setLevel(logging.CRITICAL)
 
 
 # Load environment variables from .env file
@@ -50,20 +51,8 @@ embeddings_model = OpenAIEmbeddings(
     show_progress_bar=True,
 )
 
-# Initialize the callback handler for Langfuse
-langfuse_handler = CallbackHandler(
-    public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-    secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-    host=os.getenv("LANGFUSE_HOST"),
-    trace_name="ai-response",
-    user_id=user_id,
-)
-
-langfuse_client = Langfuse(
-    public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-    secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-    host=os.getenv("LANGFUSE_HOST"),
-)
+langfuse_handler = CallbackHandler()
+langfuse_client = get_client()
 
 config = RailsConfig.from_path("./config")
 guardrails = RunnableRails(config, input_key="user_input")
@@ -78,7 +67,6 @@ def check_budget(current_usage: float) -> bool:
 # ---------------------------
 # Load JSON Data and Build Qdrant Vector Store
 # ---------------------------
-@observe
 def embed_documents(json_path: str):
     """
     Load JSON data from the specified file and convert each entry to a Document.
@@ -201,9 +189,7 @@ def end_session_tool(session_status: str):
     :returns
         Exits the system after printing the goodbye message.
     """
-    langfuse_handler = langfuse_context.get_current_langchain_handler()
-
-    langfuse_goodbye_prompt = langfuse_client.get_prompt("goodbye-prompt")
+    langfuse_goodbye_prompt = langfuse_client.get_prompt("goodbye_system_prompt")
     langchain_goodbye_prompt = ChatPromptTemplate.from_messages(
         langfuse_goodbye_prompt.get_langchain_prompt(),
     )
@@ -254,13 +240,9 @@ def budget_exceeded():
 # ---------------------------
 # Main Conversation Loop
 # ---------------------------
-@observe(name="ai-response")
 def main():
-    langfuse_context.update_current_trace(
-        session_id=session_name,
-        user_id=user_id
-    )
-    langfuse_handler = langfuse_context.get_current_langchain_handler()
+
+    langfuse = get_client()
 
     # List of available tools
     tools = [smartphone_info_tool, end_session_tool]
@@ -280,7 +262,7 @@ def main():
         include_system=True,
     )
 
-    langfuse_context_prompt = langfuse_client.get_prompt("context-prompt", label="production")
+    langfuse_context_prompt = langfuse_client.get_prompt("context_system_prompt", label="production")
     langchain_context_prompt = ChatPromptTemplate.from_messages(
         [
             langfuse_context_prompt.get_langchain_prompt()[0],
@@ -298,7 +280,7 @@ def main():
 
     context_chain_with_history_and_rails = guardrails | context_chain_with_history
 
-    langfuse_review_prompt = langfuse_client.get_prompt("review-prompt")
+    langfuse_review_prompt = langfuse_client.get_prompt("review_system_prompt")
     langchain_review_prompt = ChatPromptTemplate.from_messages(
         [
             langfuse_review_prompt.get_langchain_prompt()[0],
@@ -319,12 +301,12 @@ def main():
     end_time = datetime.now()
     start_time = end_time - timedelta(minutes=1)
 
-    traces = langfuse_client.fetch_traces(name="ai-response", user_id="hyper-user", from_timestamp=start_time,
-                                          to_timestamp=end_time).data
+    traces_response = langfuse_client.api.trace.list(user_id="hyper-user")
+    traces = traces_response.data if hasattr(traces_response, 'data') else traces_response
 
     for trace in traces:
-        current_trace = langfuse_client.fetch_trace(id=trace.id)
-        cost = current_trace.data.total_cost
+        current_trace = langfuse_client.api.trace.get(trace.id)
+        cost = current_trace.total_cost if hasattr(current_trace, 'total_cost') and current_trace.total_cost else 0.0
         initial_cost += cost
 
     if not check_budget(initial_cost):
@@ -340,29 +322,49 @@ def main():
             if check_budget(current_cost):
                 user_input = input("User: ").strip()
 
-                context = context_chain_with_history_and_rails.invoke(
-                    {"user_input": user_input},
-                    config={
-                        "configurable": {"session_id": user_id},
-                        "callbacks": [langfuse_handler], "run_name": "context"
-                    }
-                )
+                # Check for exit commands before processing through guardrails
+                if user_input.lower() in ["exit", "quit", "bye", "goodbye", "thank you", "thanks"]:
+                    with propagate_attributes(
+                        session_id=session_name,
+                        user_id=user_id
+                    ):
+                        goodbye_response = end_session_tool.invoke({"session_status": "exit"})
+                        print(f"System: {goodbye_response.content}")
+                    break
 
-                context_result = context.get("output") if isinstance(context, dict) else context
-                if context_result and context_result.strip().lower() == "i'm sorry, i can't respond to that.":
-                    print(f"System: {context_result}")
-                else:
-                    final_response = review_chain_with_history.invoke(
-                        {"user_input": user_input, "user_id": user_id, "context": context},
+                # Use propagate_attributes to apply session_id and user_id to chain invocations
+                with propagate_attributes(
+                    session_id=session_name,
+                    user_id=user_id
+                ):
+                    context = context_chain_with_history_and_rails.invoke(
+                        {"user_input": user_input},
                         config={
                             "configurable": {"session_id": user_id},
-                            "callbacks": [langfuse_handler], "run_name": "final_response"
+                            "callbacks": [langfuse_handler], "run_name": "context"
                         }
                     )
-                    print(f"System: {final_response.content}")
 
-                trace_id = langfuse_client.fetch_traces().data[0].id
-                current_cost += langfuse_client.fetch_trace(trace_id).data.total_cost
+                    context_result = context.get("output") if isinstance(context, dict) else context
+                    if context_result and context_result.strip().lower() == "i'm sorry, i can't respond to that.":
+                        print(f"System: {context_result}")
+                    else:
+                        final_response = review_chain_with_history.invoke(
+                            {"user_input": user_input, "user_id": user_id, "context": context},
+                            config={
+                                "configurable": {"session_id": user_id},
+                                "callbacks": [langfuse_handler], "run_name": "final_response"
+                            }
+                        )
+                        print(f"System: {final_response.content}")
+
+                # Use the v4 API to get the latest trace
+                latest_traces = langfuse_client.api.trace.list(limit=1)
+                if hasattr(latest_traces, 'data') and len(latest_traces.data) > 0:
+                    trace_id = latest_traces.data[0].id
+                    current_trace = langfuse_client.api.trace.get(trace_id)
+                    trace_cost = current_trace.total_cost if hasattr(current_trace, 'total_cost') and current_trace.total_cost else 0.0
+                    current_cost += trace_cost
                 print(f"Your usage so far: {current_cost}")
 
             else:
@@ -376,6 +378,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Build the product database vector store
     product_db = embed_documents("smartphones.json")
     main()
