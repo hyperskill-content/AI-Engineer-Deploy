@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timedelta
 
 import dotenv
+from fastapi import HTTPException
 from langchain_community.docstore.document import Document
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
@@ -21,8 +22,9 @@ from qdrant_client.http.models import Distance, VectorParams
 from langchain_core.messages import trim_messages
 from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
-from langchain_core.globals import set_debug
 import logging
+
+from ai_engineer_deploy.model import QueryResponse
 
 logging.getLogger("nemoguardrails").setLevel(logging.ERROR)
 logging.getLogger("nemoguardrails.actions").setLevel(logging.ERROR)
@@ -34,17 +36,18 @@ dotenv.load_dotenv()
 session_name = f"session-{uuid.uuid4().hex[:8]}"
 user_id = "HyperUser"
 total_user_budget = 0.0010000
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+REDIS_URL = os.getenv("REDIS_CONNECTION_STRING", "redis://localhost:6380/0")
 
 llm = ChatOpenAI(
     model=os.getenv("OPENAI_MODEL"),
     base_url=os.getenv("OPENAI_BASE_URL"),
-    api_key=os.getenv("OPENAI_API_KEY")
+    api_key=os.getenv("OPENAI_API_KEY"),
+    streaming=False,
 )
 
 # Initialize the embeddings model with OpenAI API credentials
 embeddings_model = OpenAIEmbeddings(
-    model="text-embedding-ada-002",
+    model=os.getenv("OPENAI_EMBEDDING_MODEL"),
     base_url=os.getenv("OPENAI_BASE_URL"),
     api_key=os.getenv("OPENAI_API_KEY"),
     show_progress_bar=True,
@@ -67,6 +70,8 @@ langfuse_client = Langfuse(
 
 config = RailsConfig.from_path("./config")
 guardrails = RunnableRails(config, input_key="user_input")
+
+vector_storage = None
 
 def check_budget(current_usage: float) -> bool:
     if current_usage < total_user_budget:
@@ -160,6 +165,15 @@ def embed_documents(json_path: str):
         return []
 
 
+
+def get_vector_storage() -> QdrantVectorStore:
+    global vector_storage
+    if vector_storage is None:
+        vector_storage = embed_documents("dataset/smartphones.json")
+    return vector_storage
+
+def get_redis_history(session_id: str) -> BaseChatMessageHistory:
+    return RedisChatMessageHistory(session_id, redis_url=REDIS_URL, ttl=120)
 # ---------------------------
 # Tool Definitions
 # ---------------------------
@@ -176,7 +190,7 @@ def smartphone_info_tool(model: str) -> str:
              or an error message if not found or if an error occurs.
     """
     try:
-        results = product_db.similarity_search(model, k=1)
+        results = get_vector_storage().similarity_search(model, k=1)
         if not results:
             print(f"Info: No results found for model: {model}")
             return "Could not find information for the specified model."
@@ -203,7 +217,7 @@ def end_session_tool(session_status: str):
     """
     langfuse_handler = langfuse_context.get_current_langchain_handler()
 
-    langfuse_goodbye_prompt = langfuse_client.get_prompt("goodbye-prompt")
+    langfuse_goodbye_prompt = langfuse_client.get_prompt("goodbye_system_prompt", label="latest")
     langchain_goodbye_prompt = ChatPromptTemplate.from_messages(
         langfuse_goodbye_prompt.get_langchain_prompt(),
     )
@@ -262,14 +276,12 @@ def main():
     )
     langfuse_handler = langfuse_context.get_current_langchain_handler()
 
+
     # List of available tools
     tools = [smartphone_info_tool, end_session_tool]
 
     # Bind the tools to the language model instance
     llm_with_tools = llm.bind_tools(tools)
-
-    def get_redis_history(session_id: str) -> BaseChatMessageHistory:
-        return RedisChatMessageHistory(session_id, redis_url=REDIS_URL, ttl=120)
 
     trimmer = trim_messages(
         strategy="last",
@@ -280,7 +292,7 @@ def main():
         include_system=True,
     )
 
-    langfuse_context_prompt = langfuse_client.get_prompt("context-prompt", label="production")
+    langfuse_context_prompt = langfuse_client.get_prompt("context_system_prompt", label="latest")
     langchain_context_prompt = ChatPromptTemplate.from_messages(
         [
             langfuse_context_prompt.get_langchain_prompt()[0],
@@ -298,7 +310,7 @@ def main():
 
     context_chain_with_history_and_rails = guardrails | context_chain_with_history
 
-    langfuse_review_prompt = langfuse_client.get_prompt("review-prompt")
+    langfuse_review_prompt = langfuse_client.get_prompt("review_system_prompt", label="latest")
     langchain_review_prompt = ChatPromptTemplate.from_messages(
         [
             langfuse_review_prompt.get_langchain_prompt()[0],
@@ -374,8 +386,99 @@ def main():
         print(f"An unexpected error occurred in the main loop: {e}")
         sys.exit(1)
 
+@observe(name="api-interaction")
+def query_assistant(query: str, user_id: str, session_name: str) -> QueryResponse:
+    langfuse_context.update_current_trace(
+        session_id=session_name,
+        user_id=user_id
+    )
+    langfuse_handler = langfuse_context.get_current_langchain_handler()
 
-if __name__ == "__main__":
-    # Build the product database vector store
-    product_db = embed_documents("smartphones.json")
-    main()
+
+
+    # List of available tools
+    tools = [smartphone_info_tool]
+
+    # Bind the tools to the language model instance
+    llm_with_tools = llm.bind_tools(tools)
+
+    trimmer = trim_messages(
+        strategy="last",
+        token_counter=llm,
+        max_tokens=1000,
+        start_on="human",
+        end_on=("human", "tool"),
+        include_system=True,
+    )
+
+    langfuse_context_prompt = langfuse_client.get_prompt("context_system_prompt", label="latest")
+    langchain_context_prompt = ChatPromptTemplate.from_messages(
+        [
+            langfuse_context_prompt.get_langchain_prompt()[0],
+            MessagesPlaceholder(variable_name="chat_history"),
+            langfuse_context_prompt.get_langchain_prompt()[1]
+        ]
+    )
+
+    langchain_context_prompt.metadata = {"langfuse_prompt": langfuse_context_prompt}
+
+    context_chain = langchain_context_prompt | trimmer | llm_with_tools | generate_context
+    context_chain_with_history = RunnableWithMessageHistory(
+        context_chain, get_redis_history, input_messages_key="user_input", history_messages_key="chat_history"
+    )
+
+    langfuse_review_prompt = langfuse_client.get_prompt("review_system_prompt", label="latest")
+    langchain_review_prompt = ChatPromptTemplate.from_messages(
+        [
+            langfuse_review_prompt.get_langchain_prompt()[0],
+            MessagesPlaceholder(variable_name="chat_history"),
+            langfuse_review_prompt.get_langchain_prompt()[1]
+        ]
+    )
+
+    langchain_review_prompt.metadata = {"langfuse_prompt": langfuse_review_prompt}
+
+    review_chain = langchain_review_prompt | llm
+    review_chain_with_history = RunnableWithMessageHistory(
+        review_chain, get_redis_history, input_messages_key="user_input", history_messages_key="chat_history"
+    )
+
+    user_input = query.strip()
+
+    rails_result = guardrails.invoke({"user_input": user_input})
+    rails_output = rails_result.get("output") if isinstance(rails_result, dict) else rails_result
+
+    if rails_output and rails_output.strip().lower() == "i'm sorry, i can't respond to that.":
+        return QueryResponse(
+            user_id=user_id,
+            session_id=session_name,
+            response=rails_output
+        )
+
+    context = context_chain_with_history.invoke(
+        {"user_input": user_input},
+        config={
+            "configurable": {"session_id": user_id},
+            "callbacks": [langfuse_handler], "run_name": "context"
+        }
+    )
+
+    context_result = context.get("output") if isinstance(context, dict) else context
+
+    final_response = review_chain_with_history.invoke(
+        {"user_input": user_input, "user_id": user_id, "context": context_result},
+        config={
+            "configurable": {"session_id": user_id},
+            "callbacks": [langfuse_handler], "run_name": "final_response"
+        }
+    )
+    return QueryResponse(
+        user_id=user_id,
+        session_id=session_name,
+        response=final_response.content
+    )
+
+
+
+
+
