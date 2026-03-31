@@ -129,7 +129,10 @@ def embed_documents(json_path: str):
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+        qdrant_client = QdrantClient(
+            url=os.getenv("QDRANT_CONNECTION_URL"),
+            api_key=os.getenv("QDRANT_API_KEY")
+        )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
         if not collection_exists:
@@ -169,8 +172,16 @@ def embed_documents(json_path: str):
 def get_vector_storage() -> QdrantVectorStore:
     global vector_storage
     if vector_storage is None:
-        vector_storage = embed_documents("dataset/smartphones.json")
+        vector_storage = QdrantVectorStore.from_existing_collection(
+            url=os.getenv("QDRANT_CONNECTION_URL"),
+            api_key=os.getenv("QDRANT_API_KEY"),
+            collection_name=os.getenv("QDRANT_COLLECTION_NAME"),
+            embedding=embeddings_model
+        )
     return vector_storage
+
+
+
 
 def get_redis_history(session_id: str) -> BaseChatMessageHistory:
     return RedisChatMessageHistory(session_id, redis_url=REDIS_URL, ttl=120)
