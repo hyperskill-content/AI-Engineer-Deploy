@@ -22,6 +22,7 @@ dependencies = [
     "requests>=2.32.5",
     "fastapi[all] (>=0.135.2,<0.136.0)",
     "uvicorn (>=0.42.0,<0.43.0)",
+    "gunicorn (>=23.0.0,<24.0.0)",
 ]
 
 [tool.poetry]
