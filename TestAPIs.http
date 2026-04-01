@@ -1,0 +1,14 @@
+###
+GET http://localhost:8000/hello/
+Accept: application/json
+
+###
+POST http://localhost:8000/ask/
+Content-Type: application/json
+
+{
+  "user_input": "what do you know about OnePlus 11 5G?",
+  "user_id": "user_1",
+  "session_id": "session_1"
+}
+###
