@@ -1,28 +1,28 @@
 import json
+import logging
 import os
-import sys
 import uuid
-from datetime import datetime, timedelta
+from contextlib import asynccontextmanager
 
 import dotenv
+import uvicorn
+from fastapi import FastAPI
 from langchain_community.docstore.document import Document
 from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.messages import trim_messages
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_redis import RedisChatMessageHistory
-from langfuse import Langfuse
+from langfuse import get_client, propagate_attributes
 from langfuse.langchain import CallbackHandler
-from langfuse import observe, get_client, propagate_attributes
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
-from langchain_core.messages import trim_messages
 from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
-from langchain_core.globals import set_debug
-import logging
+from pydantic import BaseModel
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Distance, VectorParams
 
 logging.getLogger("nemoguardrails").setLevel(logging.ERROR)
 logging.getLogger("nemoguardrails.actions").setLevel(logging.ERROR)
@@ -164,7 +164,7 @@ def smartphone_info_tool(model: str) -> str:
              or an error message if not found or if an error occurs.
     """
     try:
-        results = product_db.similarity_search(model, k=1)
+        results = app_state["product_db"].similarity_search(model, k=1)
         if not results:
             print(f"Info: No results found for model: {model}")
             return "Could not find information for the specified model."
@@ -173,38 +173,6 @@ def smartphone_info_tool(model: str) -> str:
     except Exception as e:
         print(f"Error during smartphone information retrieval for model {model}: {e}")
         return f"Error during smartphone information retrieval: {e}"
-
-
-@tool("EndSession")
-def end_session_tool(session_status: str):
-    """
-    Ends the current session and outputs a goodbye message when the user
-    expresses gratitude, or it is clear they would like to end the
-    current conversation
-
-    :param
-        session_status (str): Status message indicating the end of session
-        Should always be "exit"
-
-    :returns
-        Exits the system after printing the goodbye message.
-    """
-    langfuse_goodbye_prompt = langfuse_client.get_prompt("goodbye_system_prompt")
-    langchain_goodbye_prompt = ChatPromptTemplate.from_messages(
-        langfuse_goodbye_prompt.get_langchain_prompt(),
-    )
-
-    langchain_goodbye_prompt.metadata = {"langfuse_prompt": langfuse_goodbye_prompt}
-
-    try:
-
-        goodbye_chain = langchain_goodbye_prompt | llm
-        goodbye_message = goodbye_chain.invoke({"user_id": user_id},
-                                               config={"callbacks": [langfuse_handler], "run_name": "goodbye"})
-
-        return goodbye_message
-    except Exception as e:
-        return "Thank you for visiting. Goodbye!"
 
 
 # ---------------------------
@@ -226,28 +194,23 @@ def generate_context(llm_tools):
         if tool_call["name"] == "SmartphoneInfo":
             tool_response = smartphone_info_tool.invoke(tool_call).content
             return tool_response
-        elif tool_call["name"] == "EndSession":
-            tool_response = end_session_tool.invoke(tool_call).content
-            return tool_response
     return ""
 
-def budget_exceeded():
-    print("Unfortunately, you've exceeded your current usage. Please try again later.")
-    end_session_tool.invoke({"session_status": "exit"})
-    sys.exit(0)
-
 
 # ---------------------------
-# Main Conversation Loop
+# FastAPI App
 # ---------------------------
-def main():
+class QueryRequest(BaseModel):
+    user_input: str
+    user_id: str
+    session_id: str
 
-    langfuse = get_client()
 
-    # List of available tools
-    tools = [smartphone_info_tool, end_session_tool]
+app_state: dict = {}
 
-    # Bind the tools to the language model instance
+
+def build_chains():
+    tools = [smartphone_info_tool]
     llm_with_tools = llm.bind_tools(tools)
 
     def get_redis_history(session_id: str) -> BaseChatMessageHistory:
@@ -267,17 +230,15 @@ def main():
         [
             langfuse_context_prompt.get_langchain_prompt()[0],
             MessagesPlaceholder(variable_name="chat_history"),
-            langfuse_context_prompt.get_langchain_prompt()[1]
+            langfuse_context_prompt.get_langchain_prompt()[1],
         ]
     )
-
     langchain_context_prompt.metadata = {"langfuse_prompt": langfuse_context_prompt}
 
     context_chain = langchain_context_prompt | trimmer | llm_with_tools | generate_context
     context_chain_with_history = RunnableWithMessageHistory(
         context_chain, get_redis_history, input_messages_key="user_input", history_messages_key="chat_history"
     )
-
     context_chain_with_history_and_rails = guardrails | context_chain_with_history
 
     langfuse_review_prompt = langfuse_client.get_prompt("review_system_prompt")
@@ -285,10 +246,9 @@ def main():
         [
             langfuse_review_prompt.get_langchain_prompt()[0],
             MessagesPlaceholder(variable_name="chat_history"),
-            langfuse_review_prompt.get_langchain_prompt()[1]
+            langfuse_review_prompt.get_langchain_prompt()[1],
         ]
     )
-
     langchain_review_prompt.metadata = {"langfuse_prompt": langfuse_review_prompt}
 
     review_chain = langchain_review_prompt | llm
@@ -296,87 +256,73 @@ def main():
         review_chain, get_redis_history, input_messages_key="user_input", history_messages_key="chat_history"
     )
 
-    initial_cost = 0.0
+    return context_chain_with_history_and_rails, review_chain_with_history, get_redis_history
 
-    end_time = datetime.now()
-    start_time = end_time - timedelta(minutes=1)
 
-    traces_response = langfuse_client.api.trace.list(user_id="hyper-user")
-    traces = traces_response.data if hasattr(traces_response, 'data') else traces_response
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    app_state["product_db"] = embed_documents("smartphones.json")
+    context_chain, review_chain, _ = build_chains()
+    app_state["context_chain"] = context_chain
+    app_state["review_chain"] = review_chain
+    yield
 
+
+app = FastAPI(lifespan=lifespan)
+
+
+def get_user_cost(user_id: str) -> float:
+    total = 0.0
+    traces_response = langfuse_client.api.trace.list(user_id=user_id)
+    traces = traces_response.data if hasattr(traces_response, "data") else traces_response
     for trace in traces:
         current_trace = langfuse_client.api.trace.get(trace.id)
-        cost = current_trace.total_cost if hasattr(current_trace, 'total_cost') and current_trace.total_cost else 0.0
-        initial_cost += cost
+        cost = current_trace.total_cost if hasattr(current_trace, "total_cost") and current_trace.total_cost else 0.0
+        total += cost
+    return total
 
-    if not check_budget(initial_cost):
-        print("Unfortunately, you've exceeded your current usage. Please try again later.")
-        end_session_tool.invoke({"session_status": "exit"})
 
-    current_cost = initial_cost
+@app.post("/ask")
+def ask(request: QueryRequest):
+    current_cost = get_user_cost(request.user_id)
+    if not check_budget(current_cost):
+        return {"error": "Budget exceeded. Please try again later.", "usage": current_cost}
 
-    try:
-        print("Welcome to the Smartphone Assistant! I can help you with smartphone features and comparisons.")
+    context_chain = app_state["context_chain"]
+    review_chain = app_state["review_chain"]
 
-        while True:
-            if check_budget(current_cost):
-                user_input = input("User: ").strip()
+    with propagate_attributes(session_id=request.session_id, user_id=request.user_id):
+        context = context_chain.invoke(
+            {"user_input": request.user_input},
+            config={
+                "configurable": {"session_id": request.session_id},
+                "callbacks": [langfuse_handler],
+                "run_name": "context",
+            },
+        )
 
-                # Check for exit commands before processing through guardrails
-                if user_input.lower() in ["exit", "quit", "bye", "goodbye", "thank you", "thanks"]:
-                    with propagate_attributes(
-                        session_id=session_name,
-                        user_id=user_id
-                    ):
-                        goodbye_response = end_session_tool.invoke({"session_status": "exit"})
-                        print(f"System: {goodbye_response.content}")
-                    break
+    context_result = context.get("output") if isinstance(context, dict) else context
+    if context_result and context_result.strip().lower() == "i'm sorry, i can't respond to that.":
+        return {"response": context_result, "usage": current_cost}
 
-                # Use propagate_attributes to apply session_id and user_id to chain invocations
-                with propagate_attributes(
-                    session_id=session_name,
-                    user_id=user_id
-                ):
-                    context = context_chain_with_history_and_rails.invoke(
-                        {"user_input": user_input},
-                        config={
-                            "configurable": {"session_id": user_id},
-                            "callbacks": [langfuse_handler], "run_name": "context"
-                        }
-                    )
+    with propagate_attributes(session_id=request.session_id, user_id=request.user_id):
+        final_response = review_chain.invoke(
+            {"user_input": request.user_input, "user_id": request.user_id, "context": context_result},
+            config={
+                "configurable": {"session_id": request.session_id},
+                "callbacks": [langfuse_handler],
+                "run_name": "final_response",
+            },
+        )
 
-                    context_result = context.get("output") if isinstance(context, dict) else context
-                    if context_result and context_result.strip().lower() == "i'm sorry, i can't respond to that.":
-                        print(f"System: {context_result}")
-                    else:
-                        final_response = review_chain_with_history.invoke(
-                            {"user_input": user_input, "user_id": user_id, "context": context},
-                            config={
-                                "configurable": {"session_id": user_id},
-                                "callbacks": [langfuse_handler], "run_name": "final_response"
-                            }
-                        )
-                        print(f"System: {final_response.content}")
+    latest_traces = langfuse_client.api.trace.list(limit=1)
+    if hasattr(latest_traces, "data") and len(latest_traces.data) > 0:
+        trace = langfuse_client.api.trace.get(latest_traces.data[0].id)
+        trace_cost = trace.total_cost if hasattr(trace, "total_cost") and trace.total_cost else 0.0
+        current_cost += trace_cost
 
-                # Use the v4 API to get the latest trace
-                latest_traces = langfuse_client.api.trace.list(limit=1)
-                if hasattr(latest_traces, 'data') and len(latest_traces.data) > 0:
-                    trace_id = latest_traces.data[0].id
-                    current_trace = langfuse_client.api.trace.get(trace_id)
-                    trace_cost = current_trace.total_cost if hasattr(current_trace, 'total_cost') and current_trace.total_cost else 0.0
-                    current_cost += trace_cost
-                print(f"Your usage so far: {current_cost}")
-
-            else:
-                budget_exceeded()
-    except KeyboardInterrupt:
-        end_session_tool.invoke({"session_status": "exit"})
-        sys.exit(0)
-    except Exception as e:
-        print(f"An unexpected error occurred in the main loop: {e}")
-        sys.exit(1)
+    return {"response": final_response.content, "usage": current_cost}
 
 
 if __name__ == "__main__":
-    product_db = embed_documents("smartphones.json")
-    main()
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
