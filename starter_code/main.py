@@ -35,7 +35,7 @@ dotenv.load_dotenv()
 session_name = f"session-{uuid.uuid4().hex[:8]}"
 user_id = "HyperUser"
 total_user_budget = 0.0010000
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+REDIS_URL = os.getenv("REDIS_CONN_STRING")
 
 llm = ChatOpenAI(
     model=os.getenv("OPENAI_MODEL"),
@@ -112,7 +112,10 @@ def embed_documents(json_path: str):
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+        qdrant_client = QdrantClient(
+            url=os.environ.get("QDRANT_URL"),
+            api_key=os.environ.get("QDRANT_API_KEY"),
+        )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
         if not collection_exists:
@@ -137,6 +140,8 @@ def embed_documents(json_path: str):
         # no need to create a vector store every time
         else:
             qdrant_store = QdrantVectorStore.from_existing_collection(
+                url=os.environ.get("QDRANT_URL"),
+                api_key=os.environ.get("QDRANT_API_KEY"),
                 embedding=embeddings_model,
                 collection_name=collection_name,
             )
@@ -214,7 +219,7 @@ def build_chains():
     llm_with_tools = llm.bind_tools(tools)
 
     def get_redis_history(session_id: str) -> BaseChatMessageHistory:
-        return RedisChatMessageHistory(session_id, redis_url=REDIS_URL, ttl=120)
+        return RedisChatMessageHistory(session_id, redis_url=REDIS_URL, ttl=3600)
 
     trimmer = trim_messages(
         strategy="last",
@@ -301,11 +306,11 @@ def ask(request: QueryRequest):
             },
         )
 
-    context_result = context.get("output") if isinstance(context, dict) else context
-    if context_result and context_result.strip().lower() == "i'm sorry, i can't respond to that.":
-        return {"response": context_result, "usage": current_cost}
+        context_result = context.get("output") if isinstance(context, dict) else context
+        if context_result and context_result.strip().lower() == "i'm sorry, i can't respond to that.":
+            return {"response": context_result, "usage": current_cost}
 
-    with propagate_attributes(session_id=request.session_id, user_id=request.user_id):
+
         final_response = review_chain.invoke(
             {"user_input": request.user_input, "user_id": request.user_id, "context": context_result},
             config={
@@ -315,6 +320,8 @@ def ask(request: QueryRequest):
             },
         )
 
+    # The cost update does not work reliably with the cloud instance of Langfuse (to slow to update traces).
+    # Also, there are two traces created for each call, one for the context and one for the final response.
     latest_traces = langfuse_client.api.trace.list(limit=1)
     if hasattr(latest_traces, "data") and len(latest_traces.data) > 0:
         trace = langfuse_client.api.trace.get(latest_traces.data[0].id)
