@@ -47,3 +47,6 @@ dist/
 
 # Documentation build directories
 docs/_build/
+
+# version control
+.git/

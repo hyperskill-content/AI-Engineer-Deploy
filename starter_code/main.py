@@ -320,7 +320,7 @@ def ask(request: QueryRequest):
             },
         )
 
-    # The cost update does not work reliably with the cloud instance of Langfuse (to slow to update traces).
+    # The cost update does not work reliably with the cloud instance of Langfuse (too slow to update traces).
     # Also, there are two traces created for each call, one for the context and one for the final response.
     latest_traces = langfuse_client.api.trace.list(limit=1)
     if hasattr(latest_traces, "data") and len(latest_traces.data) > 0:
