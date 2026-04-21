@@ -14,3 +14,5 @@ nemoguardrails
 langchain-redis
 litellm
 openai
+fastapi
+uvicorn
