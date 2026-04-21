@@ -1,10 +1,11 @@
 import json
 import logging
 import os
-import sys
-import uuid
 
 import dotenv
+import uvicorn
+from fastapi import FastAPI
+from pydantic import BaseModel
 from langchain_community.docstore.document import Document
 from langchain_core.messages import AIMessage, trim_messages, messages_from_dict, message_to_dict
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
@@ -35,6 +36,14 @@ langfuse_client = Langfuse()
 
 total_cost = 0.0
 
+app = FastAPI()
+
+
+class QueryRequest(BaseModel):
+    user_input: str
+    user_id: str
+    session_id: str
+
 
 def update_usage(response):
     global total_cost
@@ -47,8 +56,6 @@ def update_usage(response):
         total_cost += cost
     return total_cost
 
-users = ["James", "George", "Mike", "Sherlock"]
-user_id = users[uuid.uuid4().int % len(users)]
 
 # Initialize the LLM with OpenAI API credentials (substitute for other models)
 llm = ChatOpenAI(
@@ -64,7 +71,6 @@ embeddings_model = OpenAIEmbeddings(
     api_key=os.getenv("OPENAI_API_KEY"),
     show_progress_bar=True,
     model_kwargs={
-        "user": user_id,
         "extra_body": {"metadata": {"session_id": "embeddings-init"}}
     }
 )
@@ -246,13 +252,19 @@ def generate_context(ai_message: AIMessage, session_id: str, user_id: str) -> No
     history = get_redis_history(session_id)
 
     # Workaround for tool_calls serialization bug in langchain_redis
-    if hasattr(ai_message, "tool_calls") and ai_message.tool_calls:
-        ai_message.additional_kwargs["_tool_calls"] = json.dumps(ai_message.tool_calls)
-
-    history.add_message(ai_message)
+    if isinstance(ai_message, AIMessage):
+        if hasattr(ai_message, "tool_calls") and ai_message.tool_calls:
+            ai_message.additional_kwargs["_tool_calls"] = json.dumps(ai_message.tool_calls)
+        history.add_message(ai_message)
+    elif isinstance(ai_message, dict) and "output" in ai_message:
+        # If it's a dict from Guardrails, we add it as an AI message
+        history.add_ai_message(ai_message["output"])
+    else:
+        # Fallback for other types
+        history.add_ai_message(str(ai_message))
 
     # Check if the AI message has any tool calls
-    if not hasattr(ai_message, "tool_calls") or not ai_message.tool_calls:
+    if not isinstance(ai_message, AIMessage) or not ai_message.tool_calls:
         return
 
     try:
@@ -274,12 +286,15 @@ def generate_context(ai_message: AIMessage, session_id: str, user_id: str) -> No
 
 
 # ---------------------------
-# Main Conversation Loop
+# API Endpoint
 # ---------------------------
+@app.post("/ask")
 @observe(name="ai-response")
-def main():
-    session_id = f"session-{uuid.uuid4().hex[:8]}"
-    user_id = users[uuid.uuid4().int % len(users)]
+async def ask(request: QueryRequest):
+    user_input = request.user_input
+    user_id = request.user_id
+    session_id = request.session_id
+
     history = get_redis_history(session_id)
 
     # Define a trimmer to manage message history length
@@ -309,7 +324,6 @@ def main():
     # Get the prompts from Langfuse
     context_system_prompt = langfuse_client.get_prompt("context_system_prompt")
     review_system_prompt = langfuse_client.get_prompt("review_system_prompt")
-    goodbye_system_prompt = langfuse_client.get_prompt("goodbye_system_prompt")
 
     context_prompt = ChatPromptTemplate.from_messages(
         [
@@ -329,16 +343,8 @@ def main():
     )
     review_prompt.metadata = {"langfuse_prompt": review_system_prompt}
 
-    goodbye_prompt = ChatPromptTemplate.from_messages(
-        [
-            goodbye_system_prompt.get_langchain_prompt()[0]
-        ]
-    )
-    goodbye_prompt.metadata = {"langfuse_prompt": goodbye_system_prompt}
-
     context_chain = context_prompt | llm_with_tools
     review_chain = review_prompt | llm_session
-    goodbye_chain = goodbye_prompt | llm_session
 
     # Load rails config
     rails_config = RailsConfig.from_path("config")
@@ -367,96 +373,58 @@ def main():
     # avoiding the extra LLM call that occurred with the previous approach.
     context_chain_with_rails = RunnableRails(rails_config, runnable=context_chain_deserializer, input_key="user_input")
 
-    try:
-        print("Welcome to the Smartphone Assistant! I can help you with smartphone features and comparisons.")
-        while True:
-            user_input = input("User: ").strip()
-            if user_input.lower() in ["exit", "quit", "bye", "end"]:
-                goodbye_message = goodbye_chain.invoke(
-                    {"user_id": user_id},
-                    config={
-                        "run_name": "goodbye-message",
-                        "callbacks": [langfuse_handler],
-                        "metadata": {
-                            "langfuse_session_id": session_id,
-                            "langfuse_user_id": user_id,
-                        },
-                    }
-                )
-                # collect feedback
-                feedback = input("Was this answer helpful? (Yes/No): ")
-                user_comment = input("Please give us a reason for your answer. This will help us improve: ")
+    # Add human message to Redis history
+    history.add_user_message(user_input)
 
-                # associate the score with that trace and push scores and comments to Langfuse
-                langfuse_client.score_current_trace(
-                    name="usefulness",
-                    value=feedback.upper(),
-                    data_type="CATEGORICAL",
-                    comment=user_comment
-                )
+    # Retrieve and trim messages for context
+    conversation = trimmer.invoke(get_history_messages(session_id))
 
-                print(f"System: {goodbye_message.content}")
-                break
+    # Serialize LangChain message objects to dicts so RunnableRails can handle them.
+    # The deserializer wrapper inside context_chain_with_rails converts them back.
+    serialized_conversation = [message_to_dict(m) for m in conversation]
 
-            # Add human message to Redis history
-            history.add_user_message(user_input)
+    ai_msg_with_tools = await context_chain_with_rails.ainvoke(
+        {"user_input": user_input, "conversation": serialized_conversation},
+        config={
+            "run_name": "context",
+            "callbacks": [langfuse_handler],
+            "metadata": {
+                "langfuse_session_id": session_id,
+                "langfuse_user_id": user_id,
+            },
+        }
+    )
 
-            # Retrieve and trim messages for context
-            conversation = trimmer.invoke(get_history_messages(session_id))
+    # Check if input rail was triggered
+    if isinstance(ai_msg_with_tools, dict) and ai_msg_with_tools.get("output") == "I'm sorry, I can't respond to that.":
+        return {"response": ai_msg_with_tools["output"]}
 
-            # Serialize LangChain message objects to dicts so RunnableRails can handle them.
-            # The deserializer wrapper inside context_chain_with_rails converts them back.
-            serialized_conversation = [message_to_dict(m) for m in conversation]
+    update_usage(ai_msg_with_tools)
 
-            ai_msg_with_tools = context_chain_with_rails.invoke(
-                {"user_input": user_input, "conversation": serialized_conversation},
-                config={
-                    "run_name": "context",
-                    "callbacks": [langfuse_handler],
-                    "metadata": {
-                        "langfuse_session_id": session_id,
-                        "langfuse_user_id": user_id,
-                    },
-                }
-            )
+    # Process tool calls and update Redis history
+    generate_context(ai_msg_with_tools, session_id, user_id)
 
-            # Check if input rail was triggered
-            if isinstance(ai_msg_with_tools, dict) and ai_msg_with_tools.get("output") == "I'm sorry, I can't respond to that.":
-                print(f"System: {ai_msg_with_tools['output']}")
-                print(f"Your usage so far: {total_cost}")
-                continue
+    # Update conversation after tools for the final response
+    conversation = trimmer.invoke(get_history_messages(session_id))
 
-            update_usage(ai_msg_with_tools)
+    response = await review_chain.ainvoke(
+        {"user_id": user_id, "user_input": user_input, "conversation": conversation},
+        config={
+            "run_name": "final-response",
+            "callbacks": [langfuse_handler],
+            "metadata": {
+                "langfuse_session_id": session_id,
+                "langfuse_user_id": user_id,
+            },
+        }
+    )
 
-            # Process tool calls and update Redis history
-            generate_context(ai_msg_with_tools, session_id, user_id)
+    update_usage(response)
+    # Add final AI response to Redis history
+    history.add_ai_message(response.content)
 
-            # Update conversation after tools for the final response
-            conversation = trimmer.invoke(get_history_messages(session_id))
-
-            response = review_chain.invoke(
-                {"user_id": user_id, "user_input": user_input, "conversation": conversation},
-                config={
-                    "run_name": "final-response",
-                    "callbacks": [langfuse_handler],
-                    "metadata": {
-                        "langfuse_session_id": session_id,
-                        "langfuse_user_id": user_id,
-                    },
-                }
-            )
-
-            print(f"System: {response.content}")
-            update_usage(response)
-            print(f"Your usage so far: {total_cost}")
-            # Add final AI response to Redis history
-            history.add_ai_message(response.content)
-
-    except Exception as e:
-        print(f"An unexpected error occurred in the main loop: {e}")
-        sys.exit(1)
+    return {"response": response.content}
 
 
 if __name__ == "__main__":
-    main()
-# start where you left off in part one of this series
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
