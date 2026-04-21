@@ -1,14 +1,14 @@
 import json
 import os
-import sys
-import uuid
 
 import dotenv
+import uvicorn
+from fastapi import FastAPI
 from langchain_community.docstore.document import Document
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import AIMessage, BaseMessage, trim_messages
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableWithMessageHistory
+from langchain_core.runnables import RunnableWithMessageHistory, RunnableLambda
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
@@ -18,19 +18,19 @@ from langfuse.langchain import CallbackHandler
 from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 from openai import AuthenticationError, BadRequestError
+from pydantic import BaseModel
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
 
+app = FastAPI()
+
 REDIS_URL = "redis://localhost:6380/0"
 
 langfuse_client = get_client()
 langfuse_handler = CallbackHandler()
-
-session_id = f"session-{uuid.uuid4().hex[:8]}"
-user_id = f"user-{uuid.uuid4().hex[:8]}"
 
 # Initialize the LLM with OpenAI API credentials (substitute for other models)
 llm = ChatOpenAI(
@@ -42,7 +42,7 @@ llm = ChatOpenAI(
 
 trimmer = trim_messages(
     strategy="last",
-    token_counter=llm,
+    token_counter="approximate",
     max_tokens=500,
     start_on="human",
     end_on=("human", "tool"),
@@ -88,83 +88,74 @@ def embed_documents(json_path: str):
         Qdrant vector store A Qdrant vector store built from the smartphone documents,
                 or an empty list if an error occurs.
     """
-    with propagate_attributes(
-        trace_name="store-documents",
-        session_id=session_id,
-        user_id=user_id
-    ):
-        try:
-            with open(json_path, "r") as f:
-                data = json.load(f)
-        except FileNotFoundError:
-            print(f"Error: The file {json_path} was not found.")
-            return []
-        except json.JSONDecodeError as jde:
-            print(f"Error decoding JSON from file {json_path}: {jde}")
-            return []
-        except Exception as e:
-            print(f"An unexpected error occurred while reading {json_path}: {e}")
-            return []
+    try:
+        with open(json_path, "r") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: The file {json_path} was not found.")
+        return []
+    except json.JSONDecodeError as jde:
+        print(f"Error decoding JSON from file {json_path}: {jde}")
+        return []
+    except Exception as e:
+        print(f"An unexpected error occurred while reading {json_path}: {e}")
+        return []
 
-        documents = []
-        for entry in data:
-            # Build a readable content string from the JSON entry
-            content = (
-                f"Model: {entry.get('model', '')}\n"
-                f"Price: {entry.get('price', '')}\n"
-                f"Rating: {entry.get('rating', '')}\n"
-                f"SIM: {entry.get('sim', '')}\n"
-                f"Processor: {entry.get('processor', '')}\n"
-                f"RAM: {entry.get('ram', '')}\n"
-                f"Battery: {entry.get('battery', '')}\n"
-                f"Display: {entry.get('display', '')}\n"
-                f"Camera: {entry.get('camera', '')}\n"
-                f"Card: {entry.get('card', '')}\n"
-                f"OS: {entry.get('os', '')}\n"
-                f"In Stock: {entry.get('in_stock', '')}"
+    documents = []
+    for entry in data:
+        # Build a readable content string from the JSON entry
+        content = (
+            f"Model: {entry.get('model', '')}\n"
+            f"Price: {entry.get('price', '')}\n"
+            f"Rating: {entry.get('rating', '')}\n"
+            f"SIM: {entry.get('sim', '')}\n"
+            f"Processor: {entry.get('processor', '')}\n"
+            f"RAM: {entry.get('ram', '')}\n"
+            f"Battery: {entry.get('battery', '')}\n"
+            f"Display: {entry.get('display', '')}\n"
+            f"Camera: {entry.get('camera', '')}\n"
+            f"Card: {entry.get('card', '')}\n"
+            f"OS: {entry.get('os', '')}\n"
+            f"In Stock: {entry.get('in_stock', '')}"
+        )
+        documents.append(Document(page_content=content))
+
+    try:
+        collection_name = "smartphones"
+        qdrant_client = QdrantClient("http://localhost:6333")
+
+        collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
+        if not collection_exists:
+            qdrant_client.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(
+                    size=1536,
+                    distance=Distance.COSINE,
+                ),
             )
-            documents.append(Document(page_content=content))
 
-        try:
-            collection_name = "smartphones"
-            qdrant_client = QdrantClient("http://localhost:6333")
+            qdrant_store = QdrantVectorStore(
+                client=qdrant_client,
+                collection_name=collection_name,
+                embedding=embeddings_model
+            )
 
-            collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
-            if not collection_exists:
-                qdrant_client.create_collection(
-                    collection_name=collection_name,
-                    vectors_config=VectorParams(
-                        size=1536,
-                        distance=Distance.COSINE,
-                    ),
-                )
+            qdrant_store.add_documents(documents=documents)
 
-                qdrant_store = QdrantVectorStore(
-                    client=qdrant_client,
-                    collection_name=collection_name,
-                    embedding=embeddings_model
-                )
+            return qdrant_store
 
-                qdrant_store.add_documents(documents=documents)
+        # no need to create a vector store every time
+        else:
+            qdrant_store = QdrantVectorStore.from_existing_collection(
+                embedding=embeddings_model,
+                collection_name=collection_name,
+            )
 
-                return qdrant_store
+            return qdrant_store
 
-            # no need to create a vector store every time
-            else:
-                qdrant_store = QdrantVectorStore.from_existing_collection(
-                    embedding=embeddings_model,
-                    collection_name=collection_name,
-                )
-
-                return qdrant_store
-
-        except Exception as e:
-            print(f"Error initializing the vector store: {e}")
-            return []
-
-
-# Initialize the vector store
-product_db = embed_documents("datasets/smartphones.json")
+    except Exception as e:
+        print(f"Error initializing the vector store: {e}")
+        return []
 
 
 # ---------------------------
@@ -185,8 +176,7 @@ def smartphone_info_tool(model: str) -> str:
     try:
         results = product_db.similarity_search(model, k=1)
         if not results:
-            print(f"Info: No results found for model: {model}")
-            return "Could not find information for the specified model."
+            return f"Could not find information for the specified model: {model}"
         info = results[0].page_content
         return info
     except Exception as e:
@@ -207,44 +197,48 @@ def generate_context(ai_message: AIMessage) -> BaseMessage:
     :returns
         A BaseMessage containing the combined tool outputs.
     """
-    with propagate_attributes(
-        trace_name="ai-response",
-        session_id=session_id,
-        user_id=user_id
-    ):
-        tool_outputs = []
-        try:
-            # Process each tool call, invoke the appropriate tool, and append the result to the conversation
-            # a message with tool calls is expected to be followed by tool responses
-            for tool_call in ai_message.tool_calls:
-                if tool_call["name"] == "SmartphoneInfo":
-                    tool_message = smartphone_info_tool.invoke(
-                        input=tool_call,
-                        config={
-                            "run_name": "smartphone-info-tool",
-                            "callbacks": [langfuse_handler],
-                            "metadata": {
-                                "langfuse_session_id": session_id,
-                                "langfuse_user_id": user_id
-                            }
-                        }
-                    )
-                    tool_outputs.append(tool_message.content)
-        except Exception as e:
-            print(f"An error occurred while processing tool calls: {e}")
+    tool_outputs = []
+    try:
+        # Process each tool call, invoke the appropriate tool, and append the result to the conversation
+        # a message with tool calls is expected to be followed by tool responses
+        for tool_call in ai_message.tool_calls:
+            if tool_call["name"] == "SmartphoneInfo":
+                tool_message = smartphone_info_tool.invoke(
+                    input=tool_call,
+                    config={
+                        "run_name": "smartphone-info-tool",
+                        "callbacks": [langfuse_handler],
+                    }
+                )
+                tool_outputs.append(tool_message.content)
+    except Exception as e:
+        print(f"An error occurred while processing tool calls: {e}")
+        return AIMessage(content="Sorry, an error occurred. Please try again.")
 
-        # Writing out tool_outputs to an AIMessage, as RunnableWithMessageHistory is not preserving the 'tool_calls'
-        # attribute, and according to the OpenAI API spec, messages with role 'tool' must be preceded by a message
-        # with 'tool_calls'. Ideally, we would want to return List[ToolMessage] here.
-        combined_content = "\n".join(tool_outputs)
-        return AIMessage(content=combined_content)
+    # Writing out tool_outputs to an AIMessage, as RunnableWithMessageHistory is not preserving the 'tool_calls'
+    # attribute, and according to the OpenAI API spec, messages with role 'tool' must be preceded by a message
+    # with 'tool_calls'. Ideally, we would want to return List[ToolMessage] here.
+    combined_content = "\n".join(tool_outputs)
+    return AIMessage(content=combined_content)
 
 
-# ---------------------------
-# Main Conversation Loop
-# ---------------------------
+class QueryResult(BaseModel):
+    user_input: str
+    user_id: str
+    session_id: str
+
+
+class QueryResponse(BaseModel):
+    content: str
+
+
+@app.post("/ask")
 @observe(name="main")
-def main():
+async def main(query_result: QueryResult) -> QueryResponse:
+    session_id = query_result.session_id
+    user_id = query_result.user_id
+    user_input = query_result.user_input
+
     with propagate_attributes(
         trace_name="ai-response",
         session_id=session_id,
@@ -264,10 +258,12 @@ def main():
         review_prompt_template = ChatPromptTemplate.from_messages(review_prompt.get_langchain_prompt())
         review_prompt_template.metadata = {"langfuse_prompt": review_prompt}
 
-        goodbye_prompt = langfuse_client.get_prompt("goodbye_prompt")
-        goodbye_prompt_template = ChatPromptTemplate.from_messages(goodbye_prompt.get_langchain_prompt())
-        goodbye_prompt_template.metadata = {"langfuse_prompt": goodbye_prompt}
-
+        # Map rails output key to user_input key for chain compatibility
+        def map_rails_output(o):
+            if isinstance(o, dict) and "output" in o:
+                return {"user_input": o["output"], **{k: v for k, v in o.items() if k != "output"}}
+            return o
+        
         context_chain = context_prompt_template | trimmer | llm_with_tools | generate_context
         context_chain_with_message_history = RunnableWithMessageHistory(
             runnable=context_chain,
@@ -275,7 +271,8 @@ def main():
             input_messages_key="user_input",
             history_messages_key="conversation"
         )
-        context_chain_with_rails = my_rails | context_chain_with_message_history
+        # Apply rails before message history, then map the output key
+        context_chain_with_rails = my_rails | RunnableLambda(map_rails_output) | context_chain_with_message_history
 
         review_chain = review_prompt_template | llm
         review_chain_with_message_history = RunnableWithMessageHistory(
@@ -285,84 +282,63 @@ def main():
             history_messages_key="conversation"
         )
 
-        goodbye_chain = goodbye_prompt_template | llm
-
         try:
-            print("Welcome to the Smartphone Assistant! I can help you with smartphone features and comparisons.")
-            while True:
-                user_input = input("User: ").strip()
-                if user_input.lower() in ["exit", "quit", "bye", "end"]:
-                    goodbye_message = goodbye_chain.invoke(
-                        input={"user_id": user_id},
-                        config={
-                            "run_name": "goodbye-message",
-                            "callbacks": [langfuse_handler],
-                            "metadata": {
-                                "langfuse_session_id": session_id,
-                                "langfuse_user_id": user_id
-                            }
-                        }
-                    )
-                    feedback = input("Was this answer helpful? (Yes/No): ")
-                    user_comment = input("Please give us a reason for your answer. This will help us improve: ")
-                    langfuse_client.score_current_trace(
-                        name="usefulness",
-                        value=feedback,
-                        data_type="CATEGORICAL",
-                        comment=user_comment
-                    )
-                    print(f"System: {goodbye_message.content}")
-                    break
-
-                context_chain_response = context_chain_with_rails.invoke(
-                    input={
-                        "user_input": user_input
+            context_chain_response = await context_chain_with_rails.ainvoke(
+                input={
+                    "user_input": user_input
+                },
+                config={
+                    "run_name": "context",
+                    "configurable": {
+                        "session_id": session_id
                     },
-                    config={
-                        "run_name": "context",
-                        "configurable": {
-                            "session_id": session_id
-                        },
-                        "callbacks": [langfuse_handler],
-                        "metadata": {
-                            "langfuse_session_id": session_id,
-                            "langfuse_user_id": user_id
-                        }
+                    "callbacks": [langfuse_handler],
+                    "metadata": {
+                        "langfuse_session_id": session_id,
+                        "langfuse_user_id": user_id
                     }
-                )
+                }
+            )
 
-                if (isinstance(context_chain_response, dict) and
-                        context_chain_response.get("output") == NEGATIVE_RESPONSE):
-                    print(f"System: {NEGATIVE_RESPONSE}")
-                    continue
+            if (isinstance(context_chain_response, dict) and
+                    context_chain_response.get("output") == NEGATIVE_RESPONSE):
+                return QueryResponse(content=NEGATIVE_RESPONSE)
 
-                review_chain_response = review_chain_with_message_history.invoke(
-                    input={
-                        "user_id": user_id,
-                        "user_input": user_input
+            review_chain_response = await review_chain_with_message_history.ainvoke(
+                input={
+                    "user_id": user_id,
+                    "user_input": user_input
+                },
+                config={
+                    "run_name": "final-response",
+                    "configurable": {
+                        "session_id": session_id
                     },
-                    config={
-                        "run_name": "final-response",
-                        "configurable": {
-                            "session_id": session_id
-                        },
-                        "callbacks": [langfuse_handler],
-                        "metadata": {
-                            "langfuse_session_id": session_id,
-                            "langfuse_user_id": user_id
-                        }
+                    "callbacks": [langfuse_handler],
+                    "metadata": {
+                        "langfuse_session_id": session_id,
+                        "langfuse_user_id": user_id
                     }
-                )
+                }
+            )
 
-                print(f"System: {review_chain_response.content}")
+            return QueryResponse(content=review_chain_response.content)
         except AuthenticationError as ae:
-            print(f"An authentication error occurred: {ae}")
+            return QueryResponse(content=f"An authentication error occurred: {ae}")
         except BadRequestError as bre:
-            print(f"A client-side error occurred: {bre}")
+            return QueryResponse(content=f"A client-side error occurred: {bre}")
         except Exception as e:
-            print(f"An unexpected error occurred in the main loop: {e}")
-            sys.exit(1)
+            return QueryResponse(content=f"An unexpected error occurred: {e}")
 
 
 if __name__ == "__main__":
-    main()
+    # Initialize the vector store
+    product_db = embed_documents("datasets/smartphones.json")
+
+    # Run the web-service
+    uvicorn.run(
+        app="main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True
+    )
