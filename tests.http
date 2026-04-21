@@ -75,7 +75,7 @@ POST {{base_url}}/ask
 Content-Type: application/json
 
 {
-  "user_input": "Erzähl mir was über das Sony Xperia 1 V.",
+  "user_input": "Erzähl mir was über das Sony Xperia 1 II.",
   "user_id": "user_5",
   "session_id": "session_history_test"
 }

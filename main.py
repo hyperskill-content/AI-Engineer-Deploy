@@ -373,11 +373,12 @@ async def ask(request: QueryRequest):
     # avoiding the extra LLM call that occurred with the previous approach.
     context_chain_with_rails = RunnableRails(rails_config, runnable=context_chain_deserializer, input_key="user_input")
 
+    # Retrieve and trim messages for context BEFORE adding the current user message,
+    # so the user input does not appear twice (once via history, once via {user_input} template).
+    conversation = trimmer.invoke(get_history_messages(session_id))
+
     # Add human message to Redis history
     history.add_user_message(user_input)
-
-    # Retrieve and trim messages for context
-    conversation = trimmer.invoke(get_history_messages(session_id))
 
     # Serialize LangChain message objects to dicts so RunnableRails can handle them.
     # The deserializer wrapper inside context_chain_with_rails converts them back.
