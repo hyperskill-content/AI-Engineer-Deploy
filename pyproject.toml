@@ -1,0 +1,8 @@
+[project]
+name = "ai-engineer-deploy"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "langfuse>=4.5.0",
+]
