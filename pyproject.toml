@@ -1,0 +1,22 @@
+[project]
+name = "ai-engineer-deploy"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.136.0",
+    "langchain>=1.2.15",
+    "langchain-community>=0.4.1",
+    "langchain-core>=1.3.0",
+    "langchain-openai>=1.1.15",
+    "langchain-qdrant>=1.1.0",
+    "langchain-redis>=0.2.5",
+    "langfuse>=4.5.0",
+    "litellm>=1.83.0",
+    "nemoguardrails>=0.21.0",
+    "openai>=2.32.0",
+    "python-dotenv>=1.2.2",
+    "qdrant-client>=1.17.1",
+    "requests>=2.33.1",
+    "uvicorn>=0.45.0",
+]
