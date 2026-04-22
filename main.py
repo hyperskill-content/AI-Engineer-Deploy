@@ -27,8 +27,6 @@ dotenv.load_dotenv()
 
 app = FastAPI()
 
-REDIS_URL = "redis://localhost:6380/0"
-
 langfuse_client = get_client()
 langfuse_handler = CallbackHandler()
 
@@ -69,7 +67,7 @@ embeddings_model = OpenAIEmbeddings(
 def get_redis_history(sid: str) -> BaseChatMessageHistory:
     return RedisChatMessageHistory(
         session_id=sid,
-        redis_url=REDIS_URL,
+        redis_url=os.getenv("REDIS_URL"),
         ttl=3600
     )
 
@@ -122,7 +120,10 @@ def embed_documents(json_path: str):
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+        qdrant_client = QdrantClient(
+            url=os.getenv("QDRANT_CLUSTER_ENDPOINT"),
+            api_key=os.getenv("QDRANT_API_KEY")
+        )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
         if not collection_exists:
@@ -147,6 +148,8 @@ def embed_documents(json_path: str):
         # no need to create a vector store every time
         else:
             qdrant_store = QdrantVectorStore.from_existing_collection(
+                url=os.getenv("QDRANT_CLUSTER_ENDPOINT"),
+                api_key=os.getenv("QDRANT_API_KEY"),
                 embedding=embeddings_model,
                 collection_name=collection_name,
             )
@@ -156,6 +159,10 @@ def embed_documents(json_path: str):
     except Exception as e:
         print(f"Error initializing the vector store: {e}")
         return []
+
+
+# Initialize the vector store
+product_db = embed_documents("datasets/smartphones.json")
 
 
 # ---------------------------
@@ -332,10 +339,6 @@ async def main(query_result: QueryResult) -> QueryResponse:
 
 
 if __name__ == "__main__":
-    # Initialize the vector store
-    product_db = embed_documents("datasets/smartphones.json")
-
-    # Run the web-service
     uvicorn.run(
         app="main:app",
         host="0.0.0.0",
