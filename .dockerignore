@@ -29,6 +29,7 @@ dist/
 
 # Miscellaneous
 *.swp
+datasets/
 
 # System files
 .DS_Store
@@ -47,3 +48,5 @@ dist/
 
 # Documentation build directories
 docs/_build/
+images/
+starter_code/
