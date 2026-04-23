@@ -5,8 +5,6 @@ import os
 import dotenv
 import uvicorn
 from fastapi import FastAPI
-from pydantic import BaseModel
-from langchain_community.docstore.document import Document
 from langchain_core.messages import AIMessage, trim_messages, messages_from_dict, message_to_dict
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
@@ -14,12 +12,12 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_redis import RedisChatMessageHistory
-from nemoguardrails import RailsConfig
-from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 from langfuse import observe, Langfuse
 from langfuse.langchain import CallbackHandler
+from nemoguardrails import RailsConfig
+from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
+from pydantic import BaseModel
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
@@ -76,7 +74,7 @@ embeddings_model = OpenAIEmbeddings(
 )
 
 # Initialize Redis connection for chat history
-REDIS_URL = "redis://localhost:6380/0"
+REDIS_URL = os.environ["REDIS_CONN_STRING"]
 
 
 def get_redis_history(session_id: str):
@@ -120,69 +118,22 @@ def embed_documents(json_path: str, custom_embeddings=None):
     """
     # Use provided embeddings or fallback to global embeddings_model
     embeddings = custom_embeddings if custom_embeddings else embeddings_model
-    try:
-        with open(json_path, "r") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: The file {json_path} was not found.")
-        return []
-    except json.JSONDecodeError as jde:
-        print(f"Error decoding JSON from file {json_path}: {jde}")
-        return []
-    except Exception as e:
-        print(f"An unexpected error occurred while reading {json_path}: {e}")
-        return []
-
-    documents = []
-    for entry in data:
-        # Build a readable content string from the JSON entry
-        content = (
-            f"Model: {entry.get('model', '')}\n"
-            f"Price: {entry.get('price', '')}\n"
-            f"Rating: {entry.get('rating', '')}\n"
-            f"SIM: {entry.get('sim', '')}\n"
-            f"Processor: {entry.get('processor', '')}\n"
-            f"RAM: {entry.get('ram', '')}\n"
-            f"Battery: {entry.get('battery', '')}\n"
-            f"Display: {entry.get('display', '')}\n"
-            f"Camera: {entry.get('camera', '')}\n"
-            f"Card: {entry.get('card', '')}\n"
-            f"OS: {entry.get('os', '')}\n"
-            f"In Stock: {entry.get('in_stock', '')}"
-        )
-        documents.append(Document(page_content=content))
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+        qdrant_client = QdrantClient(
+            url=os.environ["QDRANT_URL"],
+            api_key=os.environ["QDRANT_API_KEY"]
+        )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
-        if not collection_exists:
-            qdrant_client.create_collection(
-                collection_name=collection_name,
-                vectors_config=VectorParams(
-                    size=1536,
-                    distance=Distance.COSINE,
-                ),
-            )
-
-            qdrant_store = QdrantVectorStore(
-                client=qdrant_client,
-                collection_name=collection_name,
-                embedding=embeddings
-            )
-
-            qdrant_store.add_documents(documents=documents)
-
-            return qdrant_store
-
-        # no need to create a vector store every time
-        else:
+        if collection_exists:
             qdrant_store = QdrantVectorStore.from_existing_collection(
+                url=os.environ["QDRANT_URL"],
+                api_key=os.environ["QDRANT_API_KEY"],
                 embedding=embeddings,
                 collection_name=collection_name,
             )
-
             return qdrant_store
 
     except Exception as e:
@@ -325,21 +276,15 @@ async def ask(request: QueryRequest):
     context_system_prompt = langfuse_client.get_prompt("context_system_prompt")
     review_system_prompt = langfuse_client.get_prompt("review_system_prompt")
 
+    context_prompt_messages = context_system_prompt.get_langchain_prompt()
     context_prompt = ChatPromptTemplate.from_messages(
-        [
-            context_system_prompt.get_langchain_prompt()[0],
-            MessagesPlaceholder(variable_name="conversation"),
-            context_system_prompt.get_langchain_prompt()[1],
-        ]
+        [context_prompt_messages[0], MessagesPlaceholder(variable_name="conversation")] + context_prompt_messages[1:]
     )
     context_prompt.metadata = {"langfuse_prompt": context_system_prompt}
 
+    review_prompt_messages = review_system_prompt.get_langchain_prompt()
     review_prompt = ChatPromptTemplate.from_messages(
-        [
-            review_system_prompt.get_langchain_prompt()[0],
-            MessagesPlaceholder(variable_name="conversation"),
-            review_system_prompt.get_langchain_prompt()[1]
-        ]
+        [review_prompt_messages[0], MessagesPlaceholder(variable_name="conversation")] + review_prompt_messages[1:]
     )
     review_prompt.metadata = {"langfuse_prompt": review_system_prompt}
 
