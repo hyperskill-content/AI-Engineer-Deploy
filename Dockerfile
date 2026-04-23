@@ -29,7 +29,6 @@ RUN groupadd -r hyper && useradd --no-log-init -r -g hyper -m hyper
 # Copy app code
 COPY --chown=hyper:hyper main.py .
 COPY --chown=hyper:hyper config/ config/
-COPY --chown=hyper:hyper datasets/ datasets/
 
 USER hyper
 
