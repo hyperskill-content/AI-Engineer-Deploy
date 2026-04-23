@@ -239,6 +239,11 @@ def generate_context(ai_message: AIMessage, session_id: str, user_id: str) -> No
 # ---------------------------
 # API Endpoint
 # ---------------------------
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
+
 @app.post("/ask")
 @observe(name="ai-response")
 async def ask(request: QueryRequest):
@@ -373,4 +378,4 @@ async def ask(request: QueryRequest):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
