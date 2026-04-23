@@ -53,6 +53,7 @@ my_rails = RunnableRails(
     input_key="user_input"
 )
 
+RAILS_BLOCKED = "RAILS_BLOCKED"
 NEGATIVE_RESPONSE = "I'm sorry, I can't respond to that."
 
 # Initialize the embeddings model with OpenAI API credentials
@@ -268,7 +269,9 @@ async def main(query_result: QueryResult) -> QueryResponse:
         # Map rails output key to user_input key for chain compatibility
         def map_rails_output(o):
             if isinstance(o, dict) and "output" in o:
-                return {"user_input": o["output"], **{k: v for k, v in o.items() if k != "output"}}
+                if o["output"] == NEGATIVE_RESPONSE:
+                    raise ValueError(RAILS_BLOCKED)
+                return {"user_input": o["output"], **{k: v for k, v in o.items()}}
             return o
         
         context_chain = context_prompt_template | trimmer | llm_with_tools | generate_context
@@ -290,26 +293,27 @@ async def main(query_result: QueryResult) -> QueryResponse:
         )
 
         try:
-            context_chain_response = await context_chain_with_rails.ainvoke(
-                input={
-                    "user_input": user_input
-                },
-                config={
-                    "run_name": "context",
-                    "configurable": {
-                        "session_id": session_id
+            try:
+                await context_chain_with_rails.ainvoke(
+                    input={
+                        "user_input": user_input
                     },
-                    "callbacks": [langfuse_handler],
-                    "metadata": {
-                        "langfuse_session_id": session_id,
-                        "langfuse_user_id": user_id
+                    config={
+                        "run_name": "context",
+                        "configurable": {
+                            "session_id": session_id
+                        },
+                        "callbacks": [langfuse_handler],
+                        "metadata": {
+                            "langfuse_session_id": session_id,
+                            "langfuse_user_id": user_id
+                        }
                     }
-                }
-            )
-
-            if (isinstance(context_chain_response, dict) and
-                    context_chain_response.get("output") == NEGATIVE_RESPONSE):
-                return QueryResponse(content=NEGATIVE_RESPONSE)
+                )
+            except ValueError as ve:
+                if str(ve) == RAILS_BLOCKED:
+                    return QueryResponse(content=NEGATIVE_RESPONSE)
+                raise
 
             review_chain_response = await review_chain_with_message_history.ainvoke(
                 input={
