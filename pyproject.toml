@@ -13,7 +13,6 @@ dependencies = [
     "langchain-qdrant>=1.1.0",
     "langchain-redis>=0.2.5",
     "langfuse>=4.5.0",
-    "litellm>=1.83.0",
     "nemoguardrails>=0.21.0",
     "openai>=2.32.0",
     "python-dotenv>=1.2.2",
