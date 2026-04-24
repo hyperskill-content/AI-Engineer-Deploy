@@ -2,8 +2,8 @@
 ### Diese Datei kann direkt in PyCharm mit dem HTTP-Client ausgeführt werden.
 ### Stelle sicher, dass die App läuft (z.B. uvicorn main:app --port 8000)
 
-@base_url = http://localhost:8000
-
+#@base_url = http://localhost:8000
+@base_url = http://18.156.120.230:80
 ### 1. GÜLTIGE ANFRAGEN (Smartphone Info)
 
 # iPhone 15 Kamera
