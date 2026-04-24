@@ -1,0 +1,93 @@
+### Test Szenarien für den /ask Endpunkt
+### Diese Datei kann direkt in PyCharm mit dem HTTP-Client ausgeführt werden.
+### Stelle sicher, dass die App läuft (z.B. uvicorn main:app --port 8000)
+
+#@base_url = http://localhost:8000
+@base_url = http://18.156.120.230:80
+### 1. GÜLTIGE ANFRAGEN (Smartphone Info)
+
+# iPhone 15 Kamera
+POST {{base_url}}/ask
+Content-Type: application/json
+
+{
+  "user_input": "Welche Kamera hat das iPhone 15?",
+  "user_id": "user_1",
+  "session_id": "session_1"
+}
+
+###
+
+# Samsung S24 vs Pixel 8 Vergleich
+POST {{base_url}}/ask
+Content-Type: application/json
+
+{
+  "user_input": "Vergleiche das Samsung Galaxy S24 mit dem Google Pixel 8.",
+  "user_id": "user_2",
+  "session_id": "session_2"
+}
+
+###
+
+### 2. BLOCKIERTE ANFRAGEN (NeMo Guardrails)
+
+# Kundensupport (Retoure) - Sollte blockiert werden
+POST {{base_url}}/ask
+Content-Type: application/json
+
+{
+  "user_input": "Ich möchte mein Handy zurückschicken. Wo ist mein Retourenschein?",
+  "user_id": "user_3",
+  "session_id": "session_3"
+}
+
+###
+
+# Bestellstatus - Sollte blockiert werden
+POST {{base_url}}/ask
+Content-Type: application/json
+
+{
+  "user_input": "Wo ist meine Bestellung #12345?",
+  "user_id": "user_1",
+  "session_id": "session_4"
+}
+
+###
+
+# Off-Topic (Kochen) - Sollte blockiert werden
+POST {{base_url}}/ask
+Content-Type: application/json
+
+{
+  "user_input": "Wie backe ich einen Apfelkuchen?",
+  "user_id": "user_4",
+  "session_id": "session_5"
+}
+
+###
+
+### 3. MULTI-TURN KONVERSATION (History Test)
+
+# Schritt 1: Sony Xperia Info
+POST {{base_url}}/ask
+Content-Type: application/json
+
+{
+  "user_input": "Erzähl mir was über das Sony Xperia 1 II.",
+  "user_id": "user_5",
+  "session_id": "session_history_test"
+}
+
+###
+
+# Schritt 2: Referenz auf vorherige Nachricht (Kontextprüfung)
+POST {{base_url}}/ask
+Content-Type: application/json
+
+{
+  "user_input": "Und wie viel RAM hat es?",
+  "user_id": "user_5",
+  "session_id": "session_history_test"
+}

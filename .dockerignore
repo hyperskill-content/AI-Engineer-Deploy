@@ -47,3 +47,5 @@ dist/
 
 # Documentation build directories
 docs/_build/
+
+.secrets
