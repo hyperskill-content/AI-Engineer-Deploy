@@ -29,7 +29,6 @@ dist/
 
 # Miscellaneous
 *.swp
-datasets/
 
 # System files
 .DS_Store
