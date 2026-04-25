@@ -88,38 +88,6 @@ def embed_documents(json_path: str):
                 or an empty list if an error occurs.
     """
     try:
-        with open(json_path, "r") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: The file {json_path} was not found.")
-        return []
-    except json.JSONDecodeError as jde:
-        print(f"Error decoding JSON from file {json_path}: {jde}")
-        return []
-    except Exception as e:
-        print(f"An unexpected error occurred while reading {json_path}: {e}")
-        return []
-
-    documents = []
-    for entry in data:
-        # Build a readable content string from the JSON entry
-        content = (
-            f"Model: {entry.get('model', '')}\n"
-            f"Price: {entry.get('price', '')}\n"
-            f"Rating: {entry.get('rating', '')}\n"
-            f"SIM: {entry.get('sim', '')}\n"
-            f"Processor: {entry.get('processor', '')}\n"
-            f"RAM: {entry.get('ram', '')}\n"
-            f"Battery: {entry.get('battery', '')}\n"
-            f"Display: {entry.get('display', '')}\n"
-            f"Camera: {entry.get('camera', '')}\n"
-            f"Card: {entry.get('card', '')}\n"
-            f"OS: {entry.get('os', '')}\n"
-            f"In Stock: {entry.get('in_stock', '')}"
-        )
-        documents.append(Document(page_content=content))
-
-    try:
         collection_name = "smartphones"
         qdrant_client = QdrantClient(
             url=os.getenv("QDRANT_CLUSTER_ENDPOINT"),
@@ -127,36 +95,61 @@ def embed_documents(json_path: str):
         )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
-        if not collection_exists:
-            qdrant_client.create_collection(
-                collection_name=collection_name,
-                vectors_config=VectorParams(
-                    size=1536,
-                    distance=Distance.COSINE,
-                ),
-            )
-
-            qdrant_store = QdrantVectorStore(
-                client=qdrant_client,
-                collection_name=collection_name,
-                embedding=embeddings_model
-            )
-
-            qdrant_store.add_documents(documents=documents)
-
-            return qdrant_store
-
-        # no need to create a vector store every time
-        else:
+        if collection_exists:
             qdrant_store = QdrantVectorStore.from_existing_collection(
                 url=os.getenv("QDRANT_CLUSTER_ENDPOINT"),
                 api_key=os.getenv("QDRANT_API_KEY"),
                 embedding=embeddings_model,
                 collection_name=collection_name,
             )
-
             return qdrant_store
 
+        qdrant_client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(
+                size=1536,
+                distance=Distance.COSINE,
+            ),
+        )
+
+        qdrant_store = QdrantVectorStore(
+            client=qdrant_client,
+            collection_name=collection_name,
+            embedding=embeddings_model
+        )
+
+        with open(json_path, "r") as f:
+            data = json.load(f)
+
+        documents = []
+        for entry in data:
+            # Build a readable content string from the JSON entry
+            content = (
+                f"Model: {entry.get('model', '')}\n"
+                f"Price: {entry.get('price', '')}\n"
+                f"Rating: {entry.get('rating', '')}\n"
+                f"SIM: {entry.get('sim', '')}\n"
+                f"Processor: {entry.get('processor', '')}\n"
+                f"RAM: {entry.get('ram', '')}\n"
+                f"Battery: {entry.get('battery', '')}\n"
+                f"Display: {entry.get('display', '')}\n"
+                f"Camera: {entry.get('camera', '')}\n"
+                f"Card: {entry.get('card', '')}\n"
+                f"OS: {entry.get('os', '')}\n"
+                f"In Stock: {entry.get('in_stock', '')}"
+            )
+            documents.append(Document(page_content=content))
+
+        qdrant_store.add_documents(documents=documents)
+
+        return qdrant_store
+
+    except FileNotFoundError:
+        print(f"Error: The file {json_path} was not found.")
+        return []
+    except json.JSONDecodeError as jde:
+        print(f"Error decoding JSON from file {json_path}: {jde}")
+        return []
     except Exception as e:
         print(f"Error initializing the vector store: {e}")
         return []
