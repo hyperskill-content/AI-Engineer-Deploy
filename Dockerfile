@@ -7,16 +7,20 @@ COPY requirements.txt .
 # Create venv and install dependencies
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN <<EOF
-apt-get update
-apt-get install -y --no-install-recommends build-essential libffi-dev libssl-dev
-rm -rf /var/lib/apt/lists/*
-pip install --require-hashes --no-cache-dir -r requirements.txt
-find /opt/venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-find /opt/venv -type f -name "*.pyc" -delete 2>/dev/null || true
-find /opt/venv -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-find /opt/venv -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-EOF
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends build-essential libffi-dev libssl-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Clean up
+RUN find /opt/venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/venv -type f -name "*.pyc" -delete 2>/dev/null || true && \
+    find /opt/venv -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/venv -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
 
 # Stage - prod
 FROM python:3.13-slim AS prod
@@ -25,7 +29,6 @@ WORKDIR /app
 
 # Copy venv from builder stage
 COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
 
 # Create non-root user with home directory
 RUN groupadd -r hyper && useradd --no-log-init -r -g hyper -m hyper
@@ -36,8 +39,11 @@ COPY --chown=hyper:hyper config/ config/
 
 USER hyper
 
+# Set PATH for the user
+ENV PATH="/opt/venv/bin:$PATH"
+
 EXPOSE 8000
-CMD ["gunicorn", \
+CMD ["/opt/venv/bin/gunicorn", \
      "--worker-class", "uvicorn.workers.UvicornWorker", \
      "--bind", "0.0.0.0:8000", \
      "--workers", "2", \
