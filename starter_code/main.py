@@ -4,7 +4,6 @@ import dotenv
 import uvicorn
 import nest_asyncio
 import logging
-
 from fastapi import FastAPI
 from pydantic import BaseModel
 from langchain_community.docstore.document import Document
@@ -12,7 +11,6 @@ from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.tools import tool
-from langchain_core.runnables import RunnableLambda
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_redis import RedisChatMessageHistory
@@ -32,7 +30,7 @@ logging.getLogger("opentelemetry.context").setLevel(logging.CRITICAL)
 dotenv.load_dotenv()
 nest_asyncio.apply()
 total_user_budget = 1.0010000
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+REDIS_URL = os.getenv("REDIS_CONN_STRING")
 
 llm = ChatOpenAI(
     model=os.getenv("OPENAI_MODEL"),
@@ -103,7 +101,10 @@ def embed_documents(json_path: str):
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+        qdrant_client = QdrantClient(
+            url=os.environ["QDRANT_URL"],
+            api_key=os.environ["QDRANT_API_KEY"]
+        )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
         if not collection_exists:
@@ -123,6 +124,8 @@ def embed_documents(json_path: str):
             return qdrant_store
         else:
             return QdrantVectorStore.from_existing_collection(
+                url=os.environ["QDRANT_URL"],
+                api_key=os.environ["QDRANT_API_KEY"],
                 embedding=embeddings_model,
                 collection_name=collection_name,
             )
@@ -169,7 +172,7 @@ def ask(request: QueryRequest):
     llm_with_tools = llm.bind_tools(tools)
 
     def get_redis_history(sid: str) -> BaseChatMessageHistory:
-        return RedisChatMessageHistory(sid, redis_url=REDIS_URL, ttl=120)
+        return RedisChatMessageHistory(sid, redis_url=REDIS_URL, ttl=3600)
 
     trimmer = trim_messages(
         strategy="last",
@@ -180,7 +183,7 @@ def ask(request: QueryRequest):
         include_system=True,
     )
 
-    langfuse_context_prompt = langfuse_client.get_prompt("context-prompt")
+    langfuse_context_prompt = langfuse_client.get_prompt("context")
     langchain_context_prompt = ChatPromptTemplate.from_messages(
         [
             langfuse_context_prompt.get_langchain_prompt()[0],
@@ -194,7 +197,7 @@ def ask(request: QueryRequest):
         context_chain, get_redis_history, input_messages_key="user_input", history_messages_key="chat_history"
     )
 
-    langfuse_review_prompt = langfuse_client.get_prompt("review_system_prompt")
+    langfuse_review_prompt = langfuse_client.get_prompt("review")
     langchain_review_prompt = ChatPromptTemplate.from_messages(
         [
             langfuse_review_prompt.get_langchain_prompt()[0],
@@ -224,7 +227,8 @@ def ask(request: QueryRequest):
             {"user_input": user_input},
             config={"callbacks": [langfuse_handler]}
         )
-        guardrails_output = guardrails_result.get("output") if isinstance(guardrails_result, dict) else guardrails_result
+        guardrails_output = guardrails_result.get("output") if isinstance(guardrails_result,
+                                                                          dict) else guardrails_result
         print(f"DEBUG guardrails_output: {guardrails_output}")
 
         if guardrails_output and guardrails_output.strip().lower() == "i'm sorry, i can't respond to that.":
