@@ -29,6 +29,9 @@ logging.getLogger("opentelemetry.context").setLevel(logging.CRITICAL)
 
 dotenv.load_dotenv()
 nest_asyncio.apply()
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 total_user_budget = 1.0010000
 REDIS_URL = os.getenv("REDIS_CONN_STRING")
 
@@ -47,7 +50,7 @@ embeddings_model = OpenAIEmbeddings(
 
 langfuse_handler = CallbackHandler()
 langfuse_client = get_client()
-config = RailsConfig.from_path("./config")
+config = RailsConfig.from_path(os.path.join(BASE_DIR, "config"))
 guardrails = RunnableRails(config, input_key="user_input")
 
 app = FastAPI()
