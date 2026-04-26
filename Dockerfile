@@ -8,13 +8,11 @@ COPY requirements.txt .
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install system dependencies
+# Install system dependencies and Python packages
 RUN apt-get update && \
     apt-get install -y --no-install-recommends build-essential libffi-dev libssl-dev && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install Python packages
-RUN pip install --no-cache-dir -r requirements.txt
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Clean up
 RUN find /opt/venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
