@@ -30,7 +30,8 @@ logging.getLogger("opentelemetry.context").setLevel(logging.CRITICAL)
 
 dotenv.load_dotenv()
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+# redis cloud connection string
+REDIS_URL = os.getenv("REDIS_CONN_STRING", "redis://localhost:6380/0")
 
 # route through litellm proxy
 llm = ChatOpenAI(
@@ -73,6 +74,7 @@ class QueryRequest(BaseModel):
 
 
 def embed_documents(json_path: str):
+    """load smartphones into qdrant cloud - skips creating the collection if it already exists"""
     try:
         with open(json_path, "r") as f:
             data = json.load(f)
@@ -100,8 +102,24 @@ def embed_documents(json_path: str):
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
-        if not qdrant_client.collection_exists(collection_name=collection_name):
+        # connect to qdrant cloud using url and api key from env
+        qdrant_client = QdrantClient(
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY"),
+        )
+
+        collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
+        if collection_exists:
+            # collection already in cloud so just connect to it
+            qdrant_store = QdrantVectorStore.from_existing_collection(
+                url=os.getenv("QDRANT_URL"),
+                api_key=os.getenv("QDRANT_API_KEY"),
+                embedding=embeddings_model,
+                collection_name=collection_name,
+            )
+            return qdrant_store
+        else:
+            # first run - create the collection and upload the data
             qdrant_client.create_collection(
                 collection_name=collection_name,
                 vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
@@ -111,10 +129,7 @@ def embed_documents(json_path: str):
             )
             qdrant_store.add_documents(documents=documents)
             return qdrant_store
-        else:
-            return QdrantVectorStore.from_existing_collection(
-                embedding=embeddings_model, collection_name=collection_name
-            )
+
     except Exception as e:
         print(f"Error initializing vector store: {e}")
         return []
@@ -157,6 +172,7 @@ def ask(request: QueryRequest):
     llm_with_user = llm_with_tools.bind(user=request.user_id)
 
     def get_redis_history(session_id: str) -> BaseChatMessageHistory:
+        # connect to redis cloud using connection string from env
         return RedisChatMessageHistory(session_id, url=REDIS_URL, ttl=3600)
 
     trimmer = trim_messages(
