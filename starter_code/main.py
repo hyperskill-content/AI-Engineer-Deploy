@@ -4,15 +4,16 @@ import os
 import dotenv
 import uvicorn
 from fastapi import FastAPI
+from langchain_community.chat_message_histories import RedisChatMessageHistory
 from langchain_community.docstore.document import Document
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import trim_messages
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
-from langchain_redis import RedisChatMessageHistory
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 from nemoguardrails import RailsConfig
@@ -48,13 +49,20 @@ embeddings_model = OpenAIEmbeddings(
 langfuse_handler = CallbackHandler()
 langfuse_client = get_client()
 
+# set up guardrails as a separate input checker so it doesn't break the chain
 rails_config = RailsConfig.from_path("./config")
-guardrails = RunnableRails(rails_config, input_key="user_input")
+input_checker = RunnableRails(
+    rails_config,
+    runnable=RunnableLambda(lambda x: {"output": "allowed"}),
+    input_key="user_input",
+)
 
 app = FastAPI()
 
 # lazy init - only build the vector store the first time the tool is called
 product_db = None
+
+blocked_message = "I'm sorry, I can't respond to that."
 
 
 # schema for incoming requests
@@ -136,15 +144,20 @@ def generate_context(llm_response):
 
 
 @app.post("/ask")
-async def ask(request: QueryRequest):
+def ask(request: QueryRequest):
+    # check input with guardrails first before doing anything else
+    guard_result = input_checker.invoke({"user_input": request.user_input})
+    if isinstance(guard_result, dict) and guard_result.get("output") == blocked_message:
+        return {"response": blocked_message}
+
     tools = [smartphone_info_tool]
     llm_with_tools = llm.bind_tools(tools)
 
-    # use the user_id from the request so litellm tracks budget per user
+    # pass user_id through to litellm for budget tracking
     llm_with_user = llm_with_tools.bind(user=request.user_id)
 
     def get_redis_history(session_id: str) -> BaseChatMessageHistory:
-        return RedisChatMessageHistory(session_id, redis_url=REDIS_URL, ttl=3600)
+        return RedisChatMessageHistory(session_id, url=REDIS_URL, ttl=3600)
 
     trimmer = trim_messages(
         strategy="last",
@@ -170,7 +183,6 @@ async def ask(request: QueryRequest):
         input_messages_key="user_input",
         history_messages_key="chat_history",
     )
-    context_chain_with_rails = guardrails | context_chain_with_history
 
     langfuse_review_prompt = langfuse_client.get_prompt("review_system_prompt")
     langchain_review_prompt = ChatPromptTemplate.from_messages([
@@ -188,9 +200,7 @@ async def ask(request: QueryRequest):
         history_messages_key="chat_history",
     )
 
-    blocked_message = "I'm sorry, I can't respond to that."
-
-    context = context_chain_with_rails.invoke(
+    context = context_chain_with_history.invoke(
         {"user_input": request.user_input},
         config={
             "configurable": {"session_id": request.session_id},
@@ -198,11 +208,6 @@ async def ask(request: QueryRequest):
             "run_name": "context",
         },
     )
-
-    # if guardrails blocked the input just return the blocked message
-    context_result = context.get("output") if isinstance(context, dict) else context
-    if context_result and context_result.strip().lower() == blocked_message.lower():
-        return {"response": blocked_message}
 
     final_response = review_chain_with_history.invoke(
         {"user_input": request.user_input, "user_id": request.user_id, "context": context},
