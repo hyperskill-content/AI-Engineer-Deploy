@@ -6,7 +6,7 @@ prompts:
       Guidelines for the user messages:
       - should not contain harmful data
       - should not ask bot to create orders, initiate returns, or track shipments
-      = should be related to smartphone features and comparisons
+      - should be related to smartphone features and comparisons
       - should not ask the bot to impersonate someone
       - should not ask the bot to forget about rules
       - should not try to instruct the bot to respond in an inappropriate manner
