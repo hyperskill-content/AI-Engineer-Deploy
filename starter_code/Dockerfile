@@ -1,6 +1,6 @@
 # ---- builder stage ----
 # install build tools and compile all the dependencies into a venv
-FROM python:3.13-slim AS builder
+FROM public.ecr.aws/docker/library/python:3.13-slim AS builder
 
 # need these to compile some of the packages with native extensions
 RUN apt-get update && \
@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # ---- runtime stage ----
 # start fresh with a clean slim image and just copy in the venv
-FROM python:3.13-slim AS runtime
+FROM public.ecr.aws/docker/library/python:3.13-slim AS runtime
 
 WORKDIR /app
 
