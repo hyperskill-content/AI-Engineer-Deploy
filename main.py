@@ -1,6 +1,7 @@
 # Start from the last coding stage of the previous LLM evals project
 import json
 import os
+from copy import deepcopy
 
 import dotenv
 import uvicorn
@@ -33,9 +34,6 @@ dotenv.load_dotenv(override=True)
 # Load guardrails configuration
 config = RailsConfig.from_path("config/")
 
-# Create guardrails instance for input validation only
-input_rails = RunnableRails(config, input_key="user_input")
-
 # Initialize the LLM with OpenAI API credentials (substitute for other models)
 llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL"),
                  base_url=os.getenv("OPENAI_BASE_URL"),
@@ -48,6 +46,7 @@ embeddings_model = OpenAIEmbeddings(model=os.getenv("OPENAI_EMBEDDINGS_MODEL"),
                                     show_progress_bar=True)
 
 REDIS_URL = os.getenv("REDIS_CONNECTION_STRING")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
 
 # Initialize Langfuse client
 langfuse = get_client()
@@ -100,7 +99,7 @@ def embed_documents(json_path: str):
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://127.0.0.1:6333")
+        qdrant_client = QdrantClient(QDRANT_URL)
 
         collection_exists = qdrant_client.collection_exists(
             collection_name=collection_name)
@@ -123,7 +122,7 @@ def embed_documents(json_path: str):
             qdrant_store = QdrantVectorStore.from_existing_collection(
                 embedding=embeddings_model,
                 collection_name=collection_name,
-                url="http://127.0.0.1:6333", )
+                url=QDRANT_URL, )
 
             return qdrant_store
 
@@ -234,6 +233,26 @@ langfuse_handler = CallbackHandler()
 app = FastAPI()
 
 
+def get_user_llm(user_id: str):
+    """
+    Bind request-specific LiteLLM user metadata for budget attribution.
+    """
+    return ChatOpenAI(model=os.getenv("OPENAI_MODEL"),
+                      base_url=os.getenv("OPENAI_BASE_URL"),
+                      api_key=os.getenv("OPENAI_API_KEY"),
+                      model_kwargs={"user": user_id})
+
+
+def get_input_rails(user_id: str) -> RunnableRails:
+    """
+    Create request-scoped input rails so guardrail LLM calls use the request user.
+    """
+    rails_config = deepcopy(config)
+    rails_config.models = []
+    return RunnableRails(rails_config, llm=get_user_llm(user_id),
+                         input_key="user_input")
+
+
 def process_user_query(user_input: str, user_id: str, session_id: str) -> str:
     history = RedisChatMessageHistory(session_id=session_id, redis_url=REDIS_URL,
                                       ttl=3600)
@@ -241,6 +260,7 @@ def process_user_query(user_input: str, user_id: str, session_id: str) -> str:
     user_message = HumanMessage(content=user_input)
     conversation.append(user_message)
 
+    input_rails = get_input_rails(user_id)
     validation_result = input_rails.rails.generate(
         messages=[{"role": "user", "content": user_input}],
         options=GenerationOptions(rails=["input"],
@@ -261,9 +281,8 @@ def process_user_query(user_input: str, user_id: str, session_id: str) -> str:
                                                input={
                                                    "user_input": user_input}) as span:
         with propagate_attributes(session_id=session_id, user_id=user_id):
-            user_llm = llm.bind(user=user_id)
-            context_chain = context_prompt | llm.bind_tools(tools).bind(
-                user=user_id)
+            user_llm = get_user_llm(user_id)
+            context_chain = context_prompt | user_llm.bind_tools(tools)
             review_chain = review_prompt | user_llm
             trimmed_conversation = trimmer.invoke(conversation)
             ai_message = context_chain.invoke(
