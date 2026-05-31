@@ -23,9 +23,29 @@ from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 
 dotenv.load_dotenv()
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")  # None for local, required for Qdrant Cloud
+REQUIRED_ENV_VARS = (
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL",
+    "OPENAI_EMBEDDINGS_MODEL",
+    "OPENAI_BASE_URL",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_HOST",
+    "REDIS_URL",
+    "QDRANT_URL",
+)
+
+_missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
+if _missing:
+    raise RuntimeError(
+        "Missing required environment variables: "
+        + ", ".join(_missing)
+        + ". Check your .env file (locally) or --env-file/-e flags (in Docker)."
+    )
+
+REDIS_URL = os.environ["REDIS_URL"]
+QDRANT_URL = os.environ["QDRANT_URL"]
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")  # optional — only needed for Qdrant Cloud
 DATASET_PATH = os.getenv("DATASET_PATH", "datasets/smartphones.json")
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "smartphones")
 

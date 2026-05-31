@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenv / build artifacts
+.venv/
+venv/
+.eggs/
+*.egg-info/
+build/
+dist/
+
+# Secrets and env templates — never bake into image
+.env
+.env.*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Logs
+*.log
+
+# VCS
+.git/
+.gitignore
+
+# Docker self-references (avoid bloating context with edits to these)
+Dockerfile
+.dockerignore
+
+# Jupyter
+.ipynb_checkpoints/

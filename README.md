@@ -115,6 +115,35 @@ Response:
 
 The first request triggers lazy initialization of the Qdrant collection (`smartphones`) — expect ~5–10 s latency on cold start, sub-second afterwards.
 
+### Running in Docker (Task 3)
+
+A production-grade multi-stage Dockerfile lives in `starter_code/Dockerfile`. Build and run from `starter_code/`:
+
+```bash
+DOCKER_BUILDKIT=1 docker build -t smartphone-assistant:latest .
+
+docker run --rm -d \
+  --name smartphone-assistant \
+  -p 8000:8000 \
+  --env-file .env \
+  smartphone-assistant:latest
+
+docker logs -f smartphone-assistant   # follow logs
+docker stop smartphone-assistant      # stop
+```
+
+Image highlights:
+- Builder stage uses `ghcr.io/astral-sh/uv:python3.12-bookworm-slim` with a dedicated cache mount, so dependency rebuilds only happen when `pyproject.toml` or `uv.lock` change.
+- Runtime stage is `python:3.12-slim-bookworm`, runs as **non-root** user `app` (UID 1000), and ships a Docker `HEALTHCHECK` against `/health`.
+- `build-essential` is installed only in the builder stage so native deps (e.g. `annoy` from `nemoguardrails`) can compile from source on platforms without prebuilt wheels (notably linux/arm64). The runtime image carries only the compiled `.venv`.
+
+> **Gotcha — `--env-file` parsing.** Docker's `--env-file` is **stricter** than Python's `python-dotenv`:
+> - **No quotes** around values: `LANGFUSE_HOST=https://cloud.langfuse.com` (not `"https://..."`)
+> - **No spaces** around `=`
+> - **No `export` prefix**
+>
+> Values with quotes or spaces are passed literally and break URL parsing. If a connection fails inside the container but works locally, run `docker run --rm --env-file .env <image> env | grep VAR_NAME` to see what the process actually sees.
+
 ### Adding New Dependencies
 
 To add new packages to the project:
