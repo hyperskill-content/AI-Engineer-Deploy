@@ -25,6 +25,7 @@ dotenv.load_dotenv()
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")  # None for local, required for Qdrant Cloud
 DATASET_PATH = os.getenv("DATASET_PATH", "datasets/smartphones.json")
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "smartphones")
 
@@ -80,7 +81,7 @@ def embed_documents(json_path: str) -> Optional[QdrantVectorStore]:
         )
         documents.append(Document(page_content=content))
 
-    qdrant_client = QdrantClient(QDRANT_URL)
+    qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
     if not qdrant_client.collection_exists(collection_name=COLLECTION_NAME):
         qdrant_client.create_collection(
@@ -99,6 +100,7 @@ def embed_documents(json_path: str) -> Optional[QdrantVectorStore]:
         embedding=embeddings_model,
         collection_name=COLLECTION_NAME,
         url=QDRANT_URL,
+        api_key=QDRANT_API_KEY,
     )
 
 
