@@ -1,13 +1,15 @@
-# Start from the last coding stage of the previous LLM evals project
 import json
 import os
-import sys
-import uuid
+from contextlib import asynccontextmanager
+from typing import Optional
 
 import dotenv
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 from langchain_core.documents import Document
-from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage, trim_messages
-from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate, PromptTemplate
+from langchain_core.messages import HumanMessage, AIMessage, trim_messages
+from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
@@ -19,67 +21,49 @@ from langfuse.langchain import CallbackHandler
 from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 
-# Load environment variables from .env file
 dotenv.load_dotenv()
 
-# Generate unique session_id and user_id once
-session_id = f"session-{uuid.uuid4().hex[:8]}"
-users = ["James", "George", "Mike", "Sherlock"]
-user_id = users[uuid.uuid4().int % len(users)]
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+DATASET_PATH = os.getenv("DATASET_PATH", "datasets/smartphones.json")
+COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "smartphones")
 
-# Initialize the LLM with OpenAI API credentials (substitute for other models)
 llm = ChatOpenAI(
     model=os.getenv("OPENAI_MODEL"),
     base_url=os.getenv("OPENAI_BASE_URL"),
-    api_key=os.getenv("OPENAI_API_KEY")
+    api_key=os.getenv("OPENAI_API_KEY"),
 )
 
-# Initialize the embeddings model with OpenAI API credentials
 embeddings_model = OpenAIEmbeddings(
     model=os.getenv("OPENAI_EMBEDDINGS_MODEL"),
     base_url=os.getenv("OPENAI_BASE_URL"),
     api_key=os.getenv("OPENAI_API_KEY"),
-    show_progress_bar=True
+    show_progress_bar=False,
 )
 
-# Redis configuration
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
-
-# Initialize Langfuse client
 langfuse = get_client()
 
 
 # ---------------------------
-# Load JSON Data and Build Qdrant Vector Store
+# Lazy vector store (built on first tool call, per Task 1 spec)
 # ---------------------------
+_product_db: Optional[QdrantVectorStore] = None
+
 
 @observe(name="embed_documents")
-def embed_documents(json_path: str):
-    """
-    Load JSON data from the smartphones.json file and convert each entry to a Document.
-    :param
-        json_path (str): Path to the JSON file containing smartphone data.
-
-    :returns
-        Qdrant vector store A Qdrant vector store built from the smartphone documents,
-                or an empty list if an error occurs.
-    """
+def embed_documents(json_path: str) -> Optional[QdrantVectorStore]:
     try:
         with open(json_path, "r") as f:
             data = json.load(f)
     except FileNotFoundError:
         print(f"Error: The file {json_path} was not found.")
-        return []
+        return None
     except json.JSONDecodeError as jde:
         print(f"Error decoding JSON from file {json_path}: {jde}")
-        return []
-    except Exception as e:
-        print(f"An unexpected error occurred while reading {json_path}: {e}")
-        return []
+        return None
 
     documents = []
     for entry in data:
-        # Build a readable content string from the JSON entry
         content = (
             f"Model: {entry.get('model', '')}\n"
             f"Price: {entry.get('price', '')}\n"
@@ -96,136 +80,79 @@ def embed_documents(json_path: str):
         )
         documents.append(Document(page_content=content))
 
-    try:
-        collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+    qdrant_client = QdrantClient(QDRANT_URL)
 
-        collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
-        if not collection_exists:
-            qdrant_client.create_collection(
-                collection_name=collection_name,
-                vectors_config=VectorParams(
-                    size=1536,
-                    distance=Distance.COSINE,
-                ),
-            )
+    if not qdrant_client.collection_exists(collection_name=COLLECTION_NAME):
+        qdrant_client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+        )
+        store = QdrantVectorStore(
+            client=qdrant_client,
+            collection_name=COLLECTION_NAME,
+            embedding=embeddings_model,
+        )
+        store.add_documents(documents=documents)
+        return store
 
-            qdrant_store = QdrantVectorStore(
-                client=qdrant_client,
-                collection_name=collection_name,
-                embedding=embeddings_model
-            )
-
-            qdrant_store.add_documents(documents=documents)
-
-            return qdrant_store
-
-        # no need to create a vector store every time
-        else:
-            qdrant_store = QdrantVectorStore.from_existing_collection(
-                embedding=embeddings_model,
-                collection_name=collection_name,
-            )
-
-            return qdrant_store
-
-    except Exception as e:
-        print(f"Error initializing the vector store: {e}")
-        return []
+    return QdrantVectorStore.from_existing_collection(
+        embedding=embeddings_model,
+        collection_name=COLLECTION_NAME,
+        url=QDRANT_URL,
+    )
 
 
-# Initialize the vector store
-product_db = embed_documents("datasets/smartphones.json")
+def get_product_db() -> QdrantVectorStore:
+    global _product_db
+    if _product_db is None:
+        _product_db = embed_documents(DATASET_PATH)
+        if _product_db is None:
+            raise RuntimeError("Failed to initialize product vector store")
+    return _product_db
 
 
 # ---------------------------
-# Tool Definitions
+# Tool
 # ---------------------------
 @tool("SmartphoneInfo")
 def smartphone_info_tool(model: str) -> str:
     """
     Retrieves information about a smartphone model from the product database.
-
-    :param
-        model (str): The smartphone model to search for.
-
-    :returns
-        str: The smartphone's specifications, price, and availability,
-             or an error message if not found or if an error occurs.
     """
     try:
-        results = product_db.similarity_search(model, k=1)
+        results = get_product_db().similarity_search(model, k=1)
         if not results:
-            print(f"Info: No results found for model: {model}")
             return "Could not find information for the specified model."
-        info = results[0].page_content
-        return info
+        return results[0].page_content
     except Exception as e:
         return f"Error during smartphone information retrieval for model {model}: {e}"
 
 
 # ---------------------------
-# Tool Call Handling and Response Generation
+# Tool call handling
 # ---------------------------
 @observe(name="generate_context")
-def generate_context(ai_message: AIMessage, conversation: list, config: dict = None) -> dict:
-    """
-    Process tool calls from the language model and collect their responses as ToolMessage objects.
-
-    :param
-        ai_message (AIMessage): The language model's output message containing tool_calls.
-        conversation (list): The current conversation history (in-memory for this turn).
-        config (dict): Optional configuration dictionary containing callbacks for tracing.
-
-    :returns
-        A dictionary containing a list of ToolMessage objects under the key "tool_responses".
-    """
-    # construct the conversation history with the AI message containing tool calls
+def generate_context(ai_message: AIMessage, conversation: list, config: dict = None) -> None:
     conversation.append(ai_message)
+    if not getattr(ai_message, "tool_calls", None):
+        conversation.append(AIMessage(content="No tool calls found."))
+        return
 
-    # Check if the AI message has any tool calls
-    if not hasattr(ai_message, "tool_calls") or not ai_message.tool_calls:
-        conversation.append(
-            AIMessage(
-                content="No tool calls found. Please ensure the model is configured to use tools."
-            )
-        )
-
-    try:
-        # Process each tool call, invoke the appropriate tool, and append the result to the conversation
-        # a message with tool calls is expected to be followed by tool responses
-        for tool_call in ai_message.tool_calls:
-            if tool_call["name"] == "SmartphoneInfo":
-                # Pass config with callbacks to ensure tool invocation is traced
-                tool_output = smartphone_info_tool.invoke(tool_call, config=config)
-                conversation.append(tool_output)
-
-    except Exception as e:
-        print(f"An error occurred while processing tool calls: {e}")
-        conversation.append(
-            AIMessage(
-                content=f"An error occurred while processing tool calls: {e}"
-            )
-        )
+    for tool_call in ai_message.tool_calls:
+        if tool_call["name"] == "SmartphoneInfo":
+            tool_output = smartphone_info_tool.invoke(tool_call, config=config)
+            conversation.append(tool_output)
 
 
 # ---------------------------
-# Main Conversation Loop
+# Pipeline (built once at startup, shared across requests)
 # ---------------------------
-def main():
-    # List of available tools
-    tools = [smartphone_info_tool]
+def build_pipeline() -> dict:
+    llm_with_tools = llm.bind_tools([smartphone_info_tool])
 
-    # Bind the tools to the language model instance
-    llm_with_tools = llm.bind_tools(tools)
-
-    # Fetch prompts from Langfuse
     context_lf_prompt = langfuse.get_prompt("context_system_prompt")
     review_lf_prompt = langfuse.get_prompt("review_system_prompt")
-    goodbye_lf_prompt = langfuse.get_prompt("goodbye_system_prompt")
 
-    # Create LangChain prompts from Langfuse prompts
-    # Extract the first message (system message) and add MessagesPlaceholder for conversation history
     context_prompt = ChatPromptTemplate.from_messages([
         context_lf_prompt.get_langchain_prompt()[0],
         MessagesPlaceholder(variable_name="conversation"),
@@ -238,169 +165,113 @@ def main():
     ])
     review_prompt.metadata = {"langfuse_prompt": review_lf_prompt}
 
-    # For goodbye_prompt, extract the content from the first message
-    goodbye_prompt = PromptTemplate.from_template(
-        goodbye_lf_prompt.get_langchain_prompt()[0][1]
-    )
-    goodbye_prompt.metadata = {"langfuse_prompt": goodbye_lf_prompt}
-
-    # Create message trimmer for context chain to limit token usage
     trimmer = trim_messages(
-        strategy="last",  # Keep the most recent messages
-        token_counter=llm,  # Use LLM to count tokens
-        max_tokens=500,  # Maximum tokens for conversation history
-        start_on="human",  # Start trimmed history with a human message
-        end_on=("human", "tool"),  # End on human or tool message
-        include_system=True,  # Always include system message
+        strategy="last",
+        token_counter=llm,
+        max_tokens=500,
+        start_on="human",
+        end_on=("human", "tool"),
+        include_system=True,
     )
 
-    # Build chains (trimmer only on context_chain to manage tool call context)
-    context_chain = context_prompt | trimmer | llm_with_tools
-    review_chain = review_prompt | llm
-    goodbye_chain = goodbye_prompt | llm
+    return {
+        "context_chain": context_prompt | trimmer | llm_with_tools,
+        "review_chain": review_prompt | llm,
+        "input_rails": RunnableRails(RailsConfig.from_path("config/"), input_key="user_input"),
+        "langfuse_handler": CallbackHandler(),
+    }
 
-    # Load NeMo Guardrails configuration
-    guardrails_config = RailsConfig.from_path("config/")
 
-    # Create guardrails instance for input validation only
-    # We'll use it separately to validate user input before the chain
-    input_rails = RunnableRails(guardrails_config, input_key="user_input")
+pipeline: dict = {}
 
-    # Initialize the Langfuse handler once for the entire conversation
-    langfuse_handler = CallbackHandler()
 
-    # Initialize Redis chat history with TTL (1 hour = 3600 seconds)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    pipeline.update(build_pipeline())
+    yield
+    pipeline.clear()
+
+
+# ---------------------------
+# FastAPI app
+# ---------------------------
+app = FastAPI(title="Smartphone Assistant API", version="0.1.0", lifespan=lifespan)
+
+
+class QueryRequest(BaseModel):
+    user_input: str = Field(..., min_length=1, max_length=2000)
+    user_id: str = Field(..., min_length=1, max_length=128)
+    session_id: str = Field(..., min_length=1, max_length=128)
+
+
+class QueryResponse(BaseModel):
+    response: str
+    rail_triggered: bool = False
+
+
+@app.get("/health")
+def health() -> dict:
+    return {"status": "ok"}
+
+
+@app.post("/ask", response_model=QueryResponse)
+def ask(req: QueryRequest) -> QueryResponse:
+    context_chain = pipeline["context_chain"]
+    review_chain = pipeline["review_chain"]
+    input_rails = pipeline["input_rails"]
+    langfuse_handler = pipeline["langfuse_handler"]
+
     redis_history = RedisChatMessageHistory(
-        session_id=session_id,
+        session_id=req.session_id,
         redis_url=REDIS_URL,
-        ttl=3600  # Messages expire after 1 hour
+        ttl=3600,
     )
+
+    conversation = list(redis_history.messages)
+    user_message = HumanMessage(req.user_input)
+    conversation.append(user_message)
 
     try:
-        print("Welcome to the Smartphone Assistant! I can help you with smartphone features and comparisons.")
-        while True:
-            user_input = input("User: ").strip()
-            if user_input.lower() in ["exit", "quit", "bye", "end"]:
-                # Create a parent span for the goodbye message
-                with langfuse.start_as_current_observation(
-                    as_type="span",
-                    name="user-query",
-                    input={"user_input": user_input}
-                ) as span:
-                    with propagate_attributes(
-                        session_id=session_id,
-                        user_id=user_id
-                    ):
-                        goodbye_message = goodbye_chain.invoke(
-                            {"user_id": user_id},
-                            config={
-                                "run_name": "goodbye-message",
-                                "callbacks": [langfuse_handler]
-                            }
-                        )
+        with langfuse.start_as_current_observation(
+            as_type="span",
+            name="user-query",
+            input={"user_input": req.user_input},
+        ) as span:
+            with propagate_attributes(session_id=req.session_id, user_id=req.user_id):
+                validation_result = input_rails.invoke(
+                    {"user_input": req.user_input},
+                    config={"run_name": "input-validation", "callbacks": [langfuse_handler]},
+                )
+                rail_triggered = (
+                    isinstance(validation_result, AIMessage)
+                    and validation_result.response_metadata.get("rails_triggered", False)
+                )
+                if rail_triggered:
+                    span.update(output={"response": validation_result.content, "rail_triggered": True})
+                    return QueryResponse(response=validation_result.content, rail_triggered=True)
 
-                        # Set the output on the parent span
-                        span.update(output={"response": goodbye_message.content})
-
-                print(f"System: {goodbye_message.content}")
-
-                # Collect user feedback about the entire conversation
-                feedback = input("\nWas this conversation helpful? (Yes/No): ").strip()
-                user_comment = input("Please give us a reason for your answer. This will help us improve: ").strip()
-
-                # Score at the session level (not individual trace)
-                langfuse.create_score(
-                    session_id=session_id,  # Use the session_id from the start of the conversation
-                    name="conversation_usefulness",
-                    value=feedback,
-                    data_type="CATEGORICAL",
-                    comment=user_comment
+                ai_with_tools = context_chain.invoke(
+                    {"user_input": req.user_input, "conversation": conversation},
+                    config={"run_name": "context", "callbacks": [langfuse_handler]},
                 )
 
-                print("\nThank you for your feedback!")
-                break
+                generate_context(ai_with_tools, conversation, config={"callbacks": [langfuse_handler]})
 
-            # Load conversation history from Redis
-            conversation = list(redis_history.messages)
+                response = review_chain.invoke(
+                    {"user_id": req.user_id, "user_input": req.user_input, "conversation": conversation},
+                    config={"run_name": "final-response", "callbacks": [langfuse_handler]},
+                )
 
-            # Create user message
-            user_message = HumanMessage(user_input)
-            # Add to in-memory conversation for this turn
-            conversation.append(user_message)
-
-            # Create a parent span for this user query to group all chain invocations
-            with langfuse.start_as_current_observation(
-                as_type="span",
-                name="user-query",
-                input={"user_input": user_input}
-            ) as span:
-                # Propagate trace attributes to all child observations
-                with propagate_attributes(
-                    session_id=session_id,
-                    user_id=user_id
-                ):
-                    # First, validate input with guardrails (only passes user_input, not conversation)
-                    validation_result = input_rails.invoke(
-                        {"user_input": user_input},
-                        config={
-                            "run_name": "input-validation",
-                            "callbacks": [langfuse_handler]
-                        }
-                    )
-
-                    # Check if input rail was triggered
-                    # NeMo Guardrails adds metadata to the AIMessage when a rail is triggered
-                    rail_triggered = isinstance(validation_result, AIMessage) and validation_result.response_metadata.get("rails_triggered", False)
-
-                    if rail_triggered:
-                        # Rail triggered - skip further processing
-                        print(f"[NeMo Guardrails] Input BLOCKED: {validation_result.content}")
-                        span.update(output={"response": validation_result.content, "rail_triggered": True})
-                        print(f"System: {validation_result.content}")
-                        continue  # Skip saving to Redis and proceed to next input
-
-                    # Rail not triggered - continue with normal processing
-                    print(f"[NeMo Guardrails] Input ALLOWED: Validation passed")
-                    # Context chain invocation (with trimmer to limit tokens)
-                    ai_with_tools = context_chain.invoke(
-                        {"user_input": user_input, "conversation": conversation},
-                        config={
-                            "run_name": "context",
-                            "callbacks": [langfuse_handler]
-                        }
-                    )
-
-                    # Process tool calls and add results to in-memory conversation
-                    # Pass config with callbacks to ensure tool invocations are traced
-                    generate_context(
-                        ai_with_tools,
-                        conversation,
-                        config={"callbacks": [langfuse_handler]}
-                    )
-
-                    # Final response chain invocation
-                    response = review_chain.invoke(
-                        {"user_id": user_id, "user_input": user_input, "conversation": conversation},
-                        config={
-                            "run_name": "final-response",
-                            "callbacks": [langfuse_handler]
-                        }
-                    )
-
-                # Set the output on the parent span
-                span.update(output={"response": response.content})
-
-            print(f"System: {response.content}")
-
-            # Save ONLY clean messages to Redis (user input and final AI response)
-            # Tool calls and intermediate messages are NOT saved
-            redis_history.add_message(user_message)
-            redis_history.add_message(response)
-
+            span.update(output={"response": response.content})
     except Exception as e:
-        print(f"An unexpected error occurred in the main loop: {e}")
-        sys.exit(1)
+        print(f"Error processing /ask for session={req.session_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal error processing request")
+
+    redis_history.add_message(user_message)
+    redis_history.add_message(response)
+
+    return QueryResponse(response=response.content)
 
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -69,8 +69,16 @@ This project uses [uv](https://docs.astral.sh/uv/) for Python package management
 
 ### Running the Application
 
+The app now runs as a FastAPI web service (Task 1). From `starter_code/`:
+
 ```bash
 uv run python main.py
+```
+
+This starts uvicorn on `http://0.0.0.0:8000` with auto-reload. For production-style runs without reload:
+
+```bash
+uv run uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 If your IDE (VS Code, PyCharm) isn't recognizing the environment or you need to use tools that aren't uv-aware, activate the virtual environment manually:
@@ -82,6 +90,30 @@ source .venv/bin/activate  # On macOS/Linux
 # Run the application
 python main.py
 ```
+
+### Calling the API
+
+Send a POST request to `/ask` with the user input, user ID, and session ID:
+
+```bash
+curl -X POST http://localhost:8000/ask \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_input": "Tell me about the iPhone 15",
+    "user_id": "James",
+    "session_id": "sess-abc-123"
+  }'
+```
+
+Response:
+
+```json
+{ "response": "...", "rail_triggered": false }
+```
+
+`rail_triggered: true` indicates the NeMo Guardrails input rail blocked the request before reaching the LLM. A `GET /health` endpoint is also available for load-balancer probes.
+
+The first request triggers lazy initialization of the Qdrant collection (`smartphones`) — expect ~5–10 s latency on cold start, sub-second afterwards.
 
 ### Adding New Dependencies
 
@@ -149,8 +181,11 @@ Here are the main directories and files in this repo:
 │   │   ├── config.yml
 │   │   └── prompts.yml
 │   ├── main.py
-│   ├── requirements.txt
-│   └── smartphones.json
+│   ├── pyproject.toml
+│   ├── uv.lock
+│   ├── .env.template
+│   └── datasets
+│       └── smartphones.json
 ├── tasks
 │   ├── task_1.md
 │   ├── task_2.md
