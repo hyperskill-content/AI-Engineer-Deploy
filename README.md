@@ -144,6 +144,68 @@ Image highlights:
 >
 > Values with quotes or spaces are passed literally and break URL parsing. If a connection fails inside the container but works locally, run `docker run --rm --env-file .env <image> env | grep VAR_NAME` to see what the process actually sees.
 
+### Deployment to AWS EC2 (Task 4)
+
+The image is published to GitHub Container Registry as a public package:
+
+```
+ghcr.io/rbonillaassa/smartphone-assistant:0.1.0
+```
+
+The multi-arch manifest covers both `linux/amd64` and `linux/arm64`, so it runs on any EC2 instance type (x86 or Graviton).
+
+**Provision and deploy:**
+
+1. Launch an EC2 instance — `t3.micro`, Amazon Linux 2023, x86_64 (free-tier eligible).
+2. Security Group inbound rules: SSH (22) from **your IP only**, custom TCP (8000) from `0.0.0.0/0`.
+3. Create + download a `.pem` key pair, then `chmod 600` on it locally.
+4. SSH in and install Docker:
+   ```bash
+   ssh -i ~/.ssh/<your-key>.pem ec2-user@<ec2-public-ip>
+   sudo dnf install -y docker
+   sudo systemctl enable --now docker
+   sudo usermod -aG docker ec2-user
+   exit && ssh -i ~/.ssh/<your-key>.pem ec2-user@<ec2-public-ip>  # re-login for group
+   ```
+5. Transfer your `.env` (from `starter_code/.env`) via `scp` — **never** bake secrets into the image or pass them through user-data:
+   ```bash
+   scp -i ~/.ssh/<your-key>.pem starter_code/.env ec2-user@<ec2-public-ip>:~/.env
+   ssh -i ~/.ssh/<your-key>.pem ec2-user@<ec2-public-ip> 'chmod 600 ~/.env'
+   ```
+6. Pull and run:
+   ```bash
+   docker pull ghcr.io/rbonillaassa/smartphone-assistant:0.1.0
+   docker run -d \
+     --name smartphone-assistant \
+     --restart unless-stopped \
+     -p 8000:8000 \
+     --env-file ~/.env \
+     ghcr.io/rbonillaassa/smartphone-assistant:0.1.0
+   ```
+7. Test from your laptop:
+   ```bash
+   curl -X POST http://<ec2-public-ip>:8000/ask \
+     -H 'Content-Type: application/json' \
+     -d '{"user_input":"Tell me about the iPhone 15","user_id":"James","session_id":"prod-test-1"}'
+   ```
+
+**Teardown (do this when you finish evaluating to avoid charges):**
+
+```bash
+# In the EC2 instance: stop the container (optional — terminate kills it anyway)
+docker stop smartphone-assistant
+
+# In the AWS Console: EC2 → Instances → Select → Instance state → Terminate instance
+# This also deletes the attached EBS volume on default settings.
+
+# In the AWS Console: EC2 → Security Groups → smartphone-assistant-sg → Delete
+# In the AWS Console: EC2 → Key Pairs → smartphone-assistant-key → Delete
+
+# In GitHub: profile → Packages → smartphone-assistant → Package settings → Delete this package
+```
+
+The deployed endpoint URL is ephemeral — EC2 public IPs change when the instance is stopped and started. For a stable URL, attach an Elastic IP (free while attached to a running instance) or front the instance with a Route 53 record.
+
 ### Adding New Dependencies
 
 To add new packages to the project:
