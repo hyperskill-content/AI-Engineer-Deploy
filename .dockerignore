@@ -1,49 +1,95 @@
-# Python cache files
+# Git
+.git
+.gitignore
+
+# CI
+.codeclimate.yml
+.travis.yml
+.taskcluster.yml
+
+# Docker
+docker-compose.yml
+.docker
+
+# Byte-compiled / optimized / DLL files
 __pycache__/
+*/__pycache__/
+*/*/__pycache__/
+*/*/*/__pycache__/
 *.py[cod]
-
-# Virtual environment directories
-venv/
-.env
-
-# Local configuration files
-*.env
-
-# IDE and editor directories
-.idea/
-.vscode/
-
-# Build directories
-build/
-dist/
-
-
-# Logs
-*.log
-
-# Coverage reports
-*.coverage
-
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
-
-# Miscellaneous
-*.swp
-
-# System files
-.DS_Store
-
-# Python bytecode files
-*.pyc
+*/*.py[cod]
+*/*/*.py[cod]
+*/*/*/*.py[cod]
 
 # C extensions
 *.so
 
-# Backup files
-*~
+# Distribution / packaging
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+.env
 
-# Temporary files
-*.tmp
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
 
-# Documentation build directories
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+
+# Sphinx documentation
 docs/_build/
+
+# PyBuilder
+target/
+
+# Virtual environment
+.python-version
+.env/
+.venv/
+venv/
+
+# PyCharm
+.idea
+
+# Python mode for VIM
+.ropeproject
+*/.ropeproject
+*/*/.ropeproject
+*/*/*/.ropeproject
+
+# Vim swap files
+*.swp
+*/*.swp
+*/*/*.swp
+*/*/*/*.swp

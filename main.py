@@ -26,10 +26,9 @@ from qdrant_client.http.models import Distance, VectorParams
 
 set_debug(False)
 
-# Load environment variables from .env file.
-# Override the parent shell so a stale OPENAI_API_KEY does not shadow the
-# LiteLLM virtual key configured for this project.
-dotenv.load_dotenv(override=True)
+# Load local development variables from .env without overriding runtime
+# environment variables provided by Docker, EC2, or the parent shell.
+dotenv.load_dotenv(override=False)
 
 # Load guardrails configuration
 config = RailsConfig.from_path("config/")
@@ -77,7 +76,8 @@ def embed_documents(json_path: str):
             collection_name=collection_name)
         if collection_exists:
             return QdrantVectorStore(client=qdrant_client,
-                collection_name=collection_name, embedding=embeddings_model)
+                                     collection_name=collection_name,
+                                     embedding=embeddings_model)
 
         try:
             with open(json_path, "r") as f:
@@ -112,7 +112,7 @@ def embed_documents(json_path: str):
 
         qdrant_client.create_collection(collection_name=collection_name,
                                         vectors_config=VectorParams(size=1536,
-                                            distance=Distance.COSINE, ), )
+                                                                    distance=Distance.COSINE, ), )
 
         qdrant_store = QdrantVectorStore(client=qdrant_client,
                                          collection_name=collection_name,
