@@ -32,6 +32,14 @@ dotenv.load_dotenv(override=False)
 
 # Load guardrails configuration
 config = RailsConfig.from_path("config/")
+guardrails_model = os.getenv("OPENAI_MODEL")
+guardrails_base_url = os.getenv("OPENAI_BASE_URL")
+for model_config in config.models:
+    if model_config.type == "main":
+        if guardrails_model:
+            model_config.model = guardrails_model
+        if guardrails_base_url:
+            model_config.parameters["base_url"] = guardrails_base_url
 
 # Initialize the LLM with OpenAI API credentials (substitute for other models)
 llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL"),
