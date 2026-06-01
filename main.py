@@ -46,7 +46,9 @@ embeddings_model = OpenAIEmbeddings(model=os.getenv("OPENAI_EMBEDDINGS_MODEL"),
                                     show_progress_bar=True)
 
 REDIS_URL = os.getenv("REDIS_CONNECTION_STRING")
+
 QDRANT_URL = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
 # Initialize Langfuse client
 langfuse = get_client()
@@ -99,7 +101,7 @@ def embed_documents(json_path: str):
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient(QDRANT_URL)
+        qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, )
 
         collection_exists = qdrant_client.collection_exists(
             collection_name=collection_name)
@@ -120,9 +122,8 @@ def embed_documents(json_path: str):
         # no need to create a vector store every time
         else:
             qdrant_store = QdrantVectorStore.from_existing_collection(
-                embedding=embeddings_model,
-                collection_name=collection_name,
-                url=QDRANT_URL, )
+                embedding=embeddings_model, collection_name=collection_name,
+                url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
             return qdrant_store
 
@@ -254,8 +255,8 @@ def get_input_rails(user_id: str) -> RunnableRails:
 
 
 def process_user_query(user_input: str, user_id: str, session_id: str) -> str:
-    history = RedisChatMessageHistory(session_id=session_id, redis_url=REDIS_URL,
-                                      ttl=3600)
+    history = RedisChatMessageHistory(session_id=session_id,
+                                      redis_url=REDIS_URL, ttl=3600)
     conversation = list(history.messages)
     user_message = HumanMessage(content=user_input)
     conversation.append(user_message)
@@ -263,13 +264,11 @@ def process_user_query(user_input: str, user_id: str, session_id: str) -> str:
     input_rails = get_input_rails(user_id)
     validation_result = input_rails.rails.generate(
         messages=[{"role": "user", "content": user_input}],
-        options=GenerationOptions(rails=["input"],
-                                  output_vars=["allowed",
-                                               "triggered_input_rail",
-                                               "bot_message"], ), )
+        options=GenerationOptions(rails=["input"], output_vars=["allowed",
+                                                                "triggered_input_rail",
+                                                                "bot_message"], ), )
     validation_context = validation_result.output_data or {}
-    rail_triggered = (
-            validation_context.get("allowed") is False or bool(
+    rail_triggered = (validation_context.get("allowed") is False or bool(
         validation_context.get("triggered_input_rail")))
 
     if rail_triggered:
@@ -277,19 +276,18 @@ def process_user_query(user_input: str, user_id: str, session_id: str) -> str:
                                       "I cannot answer that request.")
 
     with langfuse.start_as_current_observation(as_type="span",
-                                               name="user-query",
-                                               input={
-                                                   "user_input": user_input}) as span:
+                                               name="user-query", input={
+                "user_input": user_input}) as span:
         with propagate_attributes(session_id=session_id, user_id=user_id):
             user_llm = get_user_llm(user_id)
             context_chain = context_prompt | user_llm.bind_tools(tools)
             review_chain = review_prompt | user_llm
             trimmed_conversation = trimmer.invoke(conversation)
-            ai_message = context_chain.invoke(
-                {"user_input": user_input,
-                 "conversation": trimmed_conversation},
-                config={"run_name": "context",
-                        "callbacks": [langfuse_handler]})
+            ai_message = context_chain.invoke({"user_input": user_input,
+                                               "conversation": trimmed_conversation},
+                                              config={"run_name": "context",
+                                                      "callbacks": [
+                                                          langfuse_handler]})
             generate_context(ai_message, conversation)
 
             response = review_chain.invoke(
