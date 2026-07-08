@@ -17,7 +17,13 @@ dependencies = [
     "langchain-redis>=0.2.5",
     "redis>=7.4.0",
     "nemoguardrails>=0.22.0",
+    "fastapi[standard]>=0.139.0",
 ]
 
 [dependency-groups]
 dev = []
+
+[tool.uv]
+required-environments = [
+	"sys_platform == 'darwin' and platform_machine == 'x86_64'"
+]

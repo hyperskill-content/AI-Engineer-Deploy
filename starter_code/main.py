@@ -19,9 +19,13 @@ from langfuse.langchain import CallbackHandler
 from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 from nemoguardrails.rails.llm.options import GenerationOptions
+from fastapi import FastAPI
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
+
+# Load FastAPI
+app = FastAPI()
 
 # Generate unique session_id and user_id once
 session_id = f"session-{uuid.uuid4().hex[:8]}"
