@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import uuid
+import uvicorn
 
 import dotenv
 from langchain_core.documents import Document
@@ -20,6 +21,7 @@ from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 from nemoguardrails.rails.llm.options import GenerationOptions
 from fastapi import FastAPI
+from models.apis import QueryRequest
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
@@ -216,9 +218,9 @@ def generate_context(ai_message: AIMessage, conversation: list, config: dict | N
 
 
 # ---------------------------
-# Main Conversation Loop
+# Initialize tools, guards and prompts
 # ---------------------------
-def main():
+def prep_ai_utils():
     # List of available tools
     tools = [smartphone_info_tool]
 
@@ -228,7 +230,6 @@ def main():
     # Fetch prompts from Langfuse
     context_lf_prompt = langfuse.get_prompt("context_system_prompt")
     review_lf_prompt = langfuse.get_prompt("review_system_prompt")
-    goodbye_lf_prompt = langfuse.get_prompt("goodbye_system_prompt")
 
     # Create LangChain prompts from Langfuse prompts
     # Extract the first message (system message) and add MessagesPlaceholder for conversation history
@@ -244,13 +245,6 @@ def main():
     ])
     review_prompt.metadata = {"langfuse_prompt": review_lf_prompt}
 
-    # goodbye_system_prompt is a text-type Langfuse prompt, so
-    # get_langchain_prompt() returns the template string directly (not a list of messages)
-    goodbye_prompt = PromptTemplate.from_template(
-        goodbye_lf_prompt.get_langchain_prompt()
-    )
-    goodbye_prompt.metadata = {"langfuse_prompt": goodbye_lf_prompt}
-
     # Create message trimmer for context chain to limit token usage
     trimmer = trim_messages(
         strategy="last",  # Keep the most recent messages
@@ -264,7 +258,6 @@ def main():
     # Build chains (trimmer only on context_chain to manage tool call context)
     context_chain = context_prompt | trimmer | llm_with_tools
     review_chain = review_prompt | llm
-    goodbye_chain = goodbye_prompt | llm
 
     # Load NeMo Guardrails configuration
     guardrails_config = RailsConfig.from_path("config/")
@@ -287,45 +280,6 @@ def main():
         print("Welcome to the Smartphone Assistant! I can help you with smartphone features and comparisons.")
         while True:
             user_input = input("User: ").strip()
-            if user_input.lower() in ["exit", "quit", "bye", "end"]:
-                # Create a parent span for the goodbye message
-                with langfuse.start_as_current_observation(
-                    as_type="span",
-                    name="user-query",
-                    input=user_input
-                ) as span:
-                    with propagate_attributes(
-                        session_id=session_id,
-                        user_id=user_id
-                    ):
-                        goodbye_message = goodbye_chain.invoke(
-                            {"user_id": user_id},
-                            config={
-                                "run_name": "goodbye-message",
-                                "callbacks": [langfuse_handler]
-                            }
-                        )
-
-                        # Set the output on the parent span
-                        span.update(output=goodbye_message.content)
-
-                print(f"System: {goodbye_message.content}")
-
-                # Collect user feedback about the entire conversation
-                feedback = input("\nWas this conversation helpful? (Yes/No): ").strip()
-                user_comment = input("Please give us a reason for your answer. This will help us improve: ").strip()
-
-                # Score at the session level (not individual trace)
-                langfuse.create_score(
-                    session_id=session_id,  # Use the session_id from the start of the conversation
-                    name="conversation_usefulness",
-                    value=feedback,
-                    data_type="CATEGORICAL",
-                    comment=user_comment
-                )
-
-                print("\nThank you for your feedback!")
-                break
 
             # Load conversation history from Redis
             conversation = list(redis_history.messages)
@@ -410,6 +364,10 @@ def main():
         print(f"An unexpected error occurred in the main loop: {e}")
         sys.exit(1)
 
+@app.post("/ask/")
+async def ask(query: QueryRequest):
+    return {"algo": "nada"}
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    prep_ai_utils()
