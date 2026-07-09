@@ -3,6 +3,8 @@ import json
 import os
 import sys
 import uuid
+from typing import Any
+
 import uvicorn
 
 import dotenv
@@ -28,11 +30,6 @@ dotenv.load_dotenv()
 
 # Load FastAPI
 app = FastAPI()
-
-# Generate unique session_id and user_id once
-session_id = f"session-{uuid.uuid4().hex[:8]}"
-users = ["James", "George", "Mike", "Sherlock"]
-user_id = users[uuid.uuid4().int % len(users)]
 
 # Initialize the LLM with OpenAI API credentials (substitute for other models)
 llm = ChatOpenAI(
@@ -220,7 +217,8 @@ def generate_context(ai_message: AIMessage, conversation: list, config: dict | N
 # ---------------------------
 # Initialize tools, guards and prompts
 # ---------------------------
-def prep_ai_utils():
+@app.post("/ask/")
+def ask(query: QueryRequest) -> dict[str, str | list[str | Any]] | None:
     # List of available tools
     tools = [smartphone_info_tool]
 
@@ -271,103 +269,96 @@ def prep_ai_utils():
 
     # Initialize Redis chat history with TTL (1 hour = 3600 seconds)
     redis_history = RedisChatMessageHistory(
-        session_id=session_id,
+        session_id=query.session_id,
         redis_url=REDIS_URL,
         ttl=3600  # Messages expire after 1 hour
     )
 
     try:
-        print("Welcome to the Smartphone Assistant! I can help you with smartphone features and comparisons.")
-        while True:
-            user_input = input("User: ").strip()
+        user_input = query.user_input
 
-            # Load conversation history from Redis
-            conversation = list(redis_history.messages)
+        # Load conversation history from Redis
+        conversation = list(redis_history.messages)
 
-            # Create user message
-            user_message = HumanMessage(user_input)
-            # Add to in-memory conversation for this turn
-            conversation.append(user_message)
+        # Create user message
+        user_message = HumanMessage(user_input)
+        # Add to in-memory conversation for this turn
+        conversation.append(user_message)
 
-            # Create a parent span for this user query to group all chain invocations
-            with langfuse.start_as_current_observation(
-                as_type="span",
-                name="user-query",
-                input=user_input
-            ) as span:
-                # Propagate trace attributes to all child observations
-                with propagate_attributes(
-                    session_id=session_id,
-                    user_id=user_id
-                ):
+        # Create a parent span for this user query to group all chain invocations
+        with langfuse.start_as_current_observation(
+            as_type="span",
+            name="user-query",
+            input=user_input
+        ) as span:
+            # Propagate trace attributes to all child observations
+            with propagate_attributes(
+                session_id=query.session_id,
+                user_id=query.user_id
+            ):
 
-                    validation_result = input_rails.rails.generate(
-                        messages=[{"role": "user", "content": user_input}],
-                        options=GenerationOptions(
-                        rails=["input"],
-                        output_vars=["allowed", "triggered_input_rail", "bot_message"],
-                         ),
-                        )
+                validation_result = input_rails.rails.generate(
+                    messages=[{"role": "user", "content": user_input}],
+                    options=GenerationOptions(
+                    rails=["input"],
+                    output_vars=["allowed", "triggered_input_rail", "bot_message"],
+                     ),
+                    )
 
-                    validation_context = validation_result.output_data or {}
-                    rail_triggered = validation_context.get("allowed") is False or bool(
-                            validation_context.get("triggered_input_rail")
+                validation_context = validation_result.output_data or {}
+                rail_triggered = validation_context.get("allowed") is False or bool(
+                        validation_context.get("triggered_input_rail")
 )
 
-                    if rail_triggered:
-                        # Rail triggered - skip further processing
-                        rail_response = validation_result.response[0]["content"]
-                        span.update(
-                            output=rail_response,
-                            metadata={"triggered_input_rail": validation_context.get("triggered_input_rail")},
-                        )
-                        print(f"System: {rail_response}")
-                        continue  # Skip saving to Redis and proceed to next input
-
-                    # Context chain invocation (with trimmer to limit tokens)
-                    ai_with_tools = context_chain.invoke(
-                        {"user_input": user_input, "conversation": conversation},
-                        config={
-                            "run_name": "context",
-                            "callbacks": [langfuse_handler]
-                        }
+                if rail_triggered:
+                    # Rail triggered - skip further processing
+                    rail_response = validation_result.response[0]["content"]
+                    span.update(
+                        output=rail_response,
+                        metadata={"triggered_input_rail": validation_context.get("triggered_input_rail")},
                     )
+                    return {"response": rail_response}
 
-                    # Process tool calls and add results to in-memory conversation
-                    # Pass config with callbacks to ensure tool invocations are traced
-                    generate_context(
-                        ai_with_tools,
-                        conversation,
-                        config={"callbacks": [langfuse_handler]}
-                    )
+                # Context chain invocation (with trimmer to limit tokens)
+                ai_with_tools = context_chain.invoke(
+                    {"user_input": user_input, "conversation": conversation},
+                    config={
+                        "run_name": "context",
+                        "callbacks": [langfuse_handler]
+                    }
+                )
 
-                    # Final response chain invocation
-                    response = review_chain.invoke(
-                        {"user_id": user_id, "user_input": user_input, "conversation": conversation},
-                        config={
-                            "run_name": "final-response",
-                            "callbacks": [langfuse_handler]
-                        }
-                    )
+                # Process tool calls and add results to in-memory conversation
+                # Pass config with callbacks to ensure tool invocations are traced
+                generate_context(
+                    ai_with_tools,
+                    conversation,
+                    config={"callbacks": [langfuse_handler]}
+                )
 
-                # Set the output on the parent span
-                span.update(output=response.content)
+                # Final response chain invocation
+                response = review_chain.invoke(
+                    {"user_id": query.user_id, "user_input": user_input, "conversation": conversation},
+                    config={
+                        "run_name": "final-response",
+                        "callbacks": [langfuse_handler]
+                    }
+                )
 
-            print(f"System: {response.content}")
+            # Set the output on the parent span
+            span.update(output=response.content)
 
-            # Save ONLY clean messages to Redis (user input and final AI response)
-            # Tool calls and intermediate messages are NOT saved
-            redis_history.add_message(user_message)
-            redis_history.add_message(response)
+        return {"response": response.content}
+
+        # Save ONLY clean messages to Redis (user input and final AI response)
+        # Tool calls and intermediate messages are NOT saved
+        redis_history.add_message(user_message)
+        redis_history.add_message(response)
 
     except Exception as e:
-        print(f"An unexpected error occurred in the main loop: {e}")
+        print(f"An unexpected error occurred in the api call: {e}")
         sys.exit(1)
 
-@app.post("/ask/")
-async def ask(query: QueryRequest):
-    return {"algo": "nada"}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-    prep_ai_utils()
