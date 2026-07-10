@@ -22,7 +22,7 @@ from langfuse.langchain import CallbackHandler
 from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 from nemoguardrails.rails.llm.options import GenerationOptions
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from models.apis import QueryRequest
 
 # Load environment variables from .env file
@@ -356,8 +356,8 @@ def ask(query: QueryRequest) -> dict[str, str | list[str | Any]] | None:
         return {"response": response.content}
 
     except Exception as e:
-        print(f"An unexpected error occurred in the api call: {e}")
-        sys.exit(1)
+        raise HTTPException(status_code=500, detail='Unexpected error occurred')
+
 
 
 if __name__ == "__main__":
