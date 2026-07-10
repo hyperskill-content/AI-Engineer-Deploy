@@ -348,12 +348,12 @@ def ask(query: QueryRequest) -> dict[str, str | list[str | Any]] | None:
             # Set the output on the parent span
             span.update(output=response.content)
 
-        return {"response": response.content}
-
         # Save ONLY clean messages to Redis (user input and final AI response)
         # Tool calls and intermediate messages are NOT saved
         redis_history.add_message(user_message)
         redis_history.add_message(response)
+
+        return {"response": response.content}
 
     except Exception as e:
         print(f"An unexpected error occurred in the api call: {e}")
