@@ -1,0 +1,8 @@
+POST http://localhost:8000/ask
+Content-Type: application/json
+
+{
+  "user_input": "Which smartphone has the best camera?",
+  "user_id": "user-123",
+  "session_id": "session-abc"
+}

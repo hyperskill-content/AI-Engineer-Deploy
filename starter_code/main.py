@@ -4,6 +4,7 @@ import os
 import sys
 import uuid
 
+import uvicorn
 from fastapi import FastAPI
 
 import dotenv
@@ -22,13 +23,10 @@ from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 from nemoguardrails.rails.llm.options import GenerationOptions
 
+from starter_code.models import QueryRequest
+
 # Load environment variables from .env file
 dotenv.load_dotenv()
-
-# Generate unique session_id and user_id once
-session_id = f"session-{uuid.uuid4().hex[:8]}"
-users = ["James", "George", "Mike", "Sherlock"]
-user_id = users[uuid.uuid4().int % len(users)]
 
 # Initialize the LLM with OpenAI API credentials (substitute for other models)
 llm = ChatOpenAI(
@@ -171,7 +169,7 @@ def smartphone_info_tool(model: str) -> str:
 # Tool Call Handling and Response Generation
 # ---------------------------
 @observe(name="generate_context")
-def generate_context(ai_message: AIMessage, conversation: list, config: dict | None = None) -> None:
+async def generate_context(ai_message: AIMessage, conversation: list, config: dict | None = None) -> None:
     """
     Process tool calls from the language model and append their responses as ToolMessage objects
     to the conversation history in place.
@@ -201,7 +199,7 @@ def generate_context(ai_message: AIMessage, conversation: list, config: dict | N
         for tool_call in ai_message.tool_calls:
             if tool_call["name"] == "SmartphoneInfo":
                 # Pass config with callbacks to ensure tool invocation is traced
-                tool_output = smartphone_info_tool.invoke(tool_call, config=config)
+                tool_output = await smartphone_info_tool.ainvoke(tool_call, config=config)
                 conversation.append(tool_output)
 
     except Exception as e:
@@ -216,7 +214,7 @@ def generate_context(ai_message: AIMessage, conversation: list, config: dict | N
 # ---------------------------
 # Main Conversation Loop
 # ---------------------------
-def main():
+async def process_query(request: QueryRequest):
     # List of available tools
     tools = [smartphone_info_tool]
 
@@ -267,15 +265,14 @@ def main():
 
     # Initialize Redis chat history with TTL (1 hour = 3600 seconds)
     redis_history = RedisChatMessageHistory(
-        session_id=session_id,
+        session_id=request.session_id,
         redis_url=REDIS_URL,
         ttl=3600  # Messages expire after 1 hour
     )
 
     try:
-        print("Welcome to the Smartphone Assistant! I can help you with smartphone features and comparisons.")
         while True:
-            user_input = input("User: ").strip()
+            user_input = request.user_input
             if user_input.lower() in ["exit", "quit", "bye", "end"]:
                 break
 
@@ -295,11 +292,11 @@ def main():
             ) as span:
                 # Propagate trace attributes to all child observations
                 with propagate_attributes(
-                    session_id=session_id,
-                    user_id=user_id
+                    session_id=request.session_id,
+                    user_id=request.user_id
                 ):
 
-                    validation_result = input_rails.rails.generate(
+                    validation_result = await input_rails.rails.generate_async(
                         messages=[{"role": "user", "content": user_input}],
                         options=GenerationOptions(
                         rails=["input"],
@@ -323,7 +320,7 @@ def main():
                         continue  # Skip saving to Redis and proceed to next input
 
                     # Context chain invocation (with trimmer to limit tokens)
-                    ai_with_tools = context_chain.invoke(
+                    ai_with_tools = await context_chain.ainvoke(
                         {"user_input": user_input, "conversation": conversation},
                         config={
                             "run_name": "context",
@@ -333,15 +330,15 @@ def main():
 
                     # Process tool calls and add results to in-memory conversation
                     # Pass config with callbacks to ensure tool invocations are traced
-                    generate_context(
+                    await generate_context(
                         ai_with_tools,
                         conversation,
                         config={"callbacks": [langfuse_handler]}
                     )
 
                     # Final response chain invocation
-                    response = review_chain.invoke(
-                        {"user_id": user_id, "user_input": user_input, "conversation": conversation},
+                    response = await review_chain.ainvoke(
+                        {"user_id": request.user_id, "user_input": user_input, "conversation": conversation},
                         config={
                             "run_name": "final-response",
                             "callbacks": [langfuse_handler]
@@ -357,11 +354,22 @@ def main():
             # Tool calls and intermediate messages are NOT saved
             redis_history.add_message(user_message)
             redis_history.add_message(response)
+            return response.content
 
     except Exception as e:
         print(f"An unexpected error occurred in the main loop: {e}")
-        sys.exit(1)
+        return f"An unexpected error occurred in the main loop: {e}"
 
+# Create an instance of app with FastAPI.
+app = FastAPI(title="AI-powered smartphone assistant")
+
+# Ask endpoint: responds to user's question about smartphones.
+@app.post("/ask")
+# Create an async function that handles the ask endpoint:
+async def ask(request: QueryRequest):
+# Return a dictionary, which FastAPI automatically converts into JSON format:
+    response = await process_query(request)
+    return {"response": response}
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
