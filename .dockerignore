@@ -1,49 +1,98 @@
-# Python cache files
+# Version control
+.git/
+**/.git/
+.gitignore
+
+# Python cache and compiled files
 __pycache__/
+**/__pycache__/
 *.py[cod]
-
-# Virtual environment directories
-venv/
-.env
-
-# Local configuration files
-*.env
-
-# IDE and editor directories
-.idea/
-.vscode/
-
-# Build directories
-build/
-dist/
-
-
-# Logs
-*.log
-
-# Coverage reports
-*.coverage
-
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
-
-# Miscellaneous
-*.swp
-
-# System files
-.DS_Store
-
-# Python bytecode files
-*.pyc
-
-# C extensions
+*$py.class
 *.so
 
-# Backup files
+# Virtual environments and local Python installs
+.venv/
+**/.venv/
+venv/
+**/venv/
+env/
+**/env/
+ENV/
+**/ENV/
+env.bak/
+venv.bak/
+__pypackages__/
+**/__pypackages__/
+.Python
+
+# Environment and secret files
+.env
+**/.env
+.env.*
+**/.env.*
+!.env.sample
+!**/.env.sample
+!.env.example
+!**/.env.example
+
+# Test, lint, type-check, and coverage artifacts
+.cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+.nox/
+.pyre/
+.pytype/
+cover/
+*.cover
+*.py.cover
+
+# Build and packaging outputs
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+wheels/
+share/python-wheels/
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Editor and IDE files
+.idea/
+.vscode/
+.cursorignore
+.cursorindexingignore
+*.swp
+*.swo
 *~
 
-# Temporary files
-*.tmp
+# OS and filesystem noise
+.DS_Store
+Thumbs.db
+Desktop.ini
 
-# Documentation build directories
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Notebook and documentation build artifacts
+.ipynb_checkpoints/
 docs/_build/
+site/
+
+# Docker local overrides
+docker-compose.override.yml
+docker-compose.override.yaml

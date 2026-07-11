@@ -82,6 +82,18 @@ source .venv/bin/activate  # On macOS/Linux
 # Run the application
 python main.py
 ```
+
+To run the docker container, use the following commands:
+```bash
+docker build -t hypersite:latest .
+```
+```bash
+docker run -d `
+  --name confident_shamir `
+  --env-file starter_code\.env `
+  -p 8000:8000 `
+  hypersite:latest
+```
 To verify the API is working, you can use the following command:
 ```powershell
 $body = @{
@@ -91,7 +103,6 @@ $body = @{
 } | ConvertTo-Json
 Invoke-RestMethod -Uri "http://localhost:8000/ask" -Method Post -ContentType "application/json" -Body $body
 ```
-
 ### Adding New Dependencies
 
 To add new packages to the project:
