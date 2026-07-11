@@ -2,7 +2,17 @@ POST http://localhost:8000/ask
 Content-Type: application/json
 
 {
-  "user_input": "Which smartphone has the best camera?",
-  "user_id": "user-123",
+  "user_input": "How is the camera in the Samsung Galaxy S23",
+  "user_id": "Karo-123",
+  "session_id": "session-abc"
+}
+
+###
+POST http://localhost:8000/ask
+Content-Type: application/json
+
+{
+  "user_input": "SHould I get the Apple iPhone 13",
+  "user_id": "Karo-123",
   "session_id": "session-abc"
 }

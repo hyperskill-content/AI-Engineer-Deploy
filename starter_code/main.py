@@ -44,7 +44,7 @@ embeddings_model = OpenAIEmbeddings(
 )
 
 # Redis configuration
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+REDIS_URL = os.getenv("REDIS_CONNECTION_STRING", "redis://localhost:6380/0")
 
 # Initialize Langfuse client
 langfuse = get_client()
@@ -98,10 +98,13 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
         documents.append(Document(page_content=content))
 
     try:
+        url = os.environ.get("QDRANT_URL", "http://localhost:6333")
+        api_key = os.environ.get("QDRANT_API_KEY", None)
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+        qdrant_client = QdrantClient(url=url, api_key=api_key)
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
+        print(f"Collection exists: {collection_exists}")
         if not collection_exists:
             qdrant_client.create_collection(
                 collection_name=collection_name,
@@ -123,11 +126,12 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
 
         # no need to create a vector store every time
         else:
-            qdrant_store = QdrantVectorStore.from_existing_collection(
-                embedding=embeddings_model,
+            qdrant_store = QdrantVectorStore(
+                client=qdrant_client,
                 collection_name=collection_name,
+                embedding=embeddings_model,
             )
-
+            print("Vector store initialized from existing collection")
             return qdrant_store
 
     except Exception as e:
@@ -160,8 +164,10 @@ def smartphone_info_tool(model: str) -> str:
             print(f"Info: No results found for model: {model}")
             return "Could not find information for the specified model."
         info = results[0].page_content
+        print(f"Smartphone Info: {info}")
         return info
     except Exception as e:
+        print(f"Error during smartphone information retrieval for model {model}: {e}")
         return f"Error during smartphone information retrieval for model {model}: {e}"
 
 
@@ -316,7 +322,7 @@ async def process_query(request: QueryRequest):
                             output=rail_response,
                             metadata={"triggered_input_rail": validation_context.get("triggered_input_rail")},
                         )
-                        print(f"System: {rail_response}")
+                        print(f"System (rail response): {rail_response}")
                         continue  # Skip saving to Redis and proceed to next input
 
                     # Context chain invocation (with trimmer to limit tokens)
@@ -348,7 +354,7 @@ async def process_query(request: QueryRequest):
                 # Set the output on the parent span
                 span.update(output=response.content)
 
-            print(f"System: {response.content}")
+            print(f"System (review_chain response) : {response.content}")
 
             # Save ONLY clean messages to Redis (user input and final AI response)
             # Tool calls and intermediate messages are NOT saved
