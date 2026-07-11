@@ -10,11 +10,11 @@ from langchain_core.messages import HumanMessage, AIMessage, trim_messages
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_community.chat_message_histories import RedisChatMessageHistory
 from langchain_qdrant import QdrantVectorStore
-from langchain_redis import RedisChatMessageHistory
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
-from langfuse import observe, propagate_attributes, get_client
+from langfuse import Langfuse, observe, propagate_attributes
 from langfuse.langchain import CallbackHandler
 from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
@@ -30,8 +30,10 @@ class QueryRequest(BaseModel):
     session_id: str
 
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Load environment variables from .env file
-dotenv.load_dotenv()
+dotenv.load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 # Initialize the LLM with OpenAI API credentials (substitute for other models)
 llm = ChatOpenAI(
@@ -48,11 +50,18 @@ embeddings_model = OpenAIEmbeddings(
     show_progress_bar=True
 )
 
-# Redis configuration
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+# Redis Cloud configuration
+REDIS_URL = os.environ["REDIS_URL"]
 
-# Initialize Langfuse client
-langfuse = get_client()
+# Initialize Langfuse cloud client
+LANGFUSE_BASE_URL = os.getenv("LANGFUSE_BASE_URL") or os.environ["LANGFUSE_HOST"]
+LANGFUSE_PUBLIC_KEY = os.environ["LANGFUSE_PUBLIC_KEY"]
+LANGFUSE_SECRET_KEY = os.environ["LANGFUSE_SECRET_KEY"]
+langfuse = Langfuse(
+    public_key=LANGFUSE_PUBLIC_KEY,
+    secret_key=LANGFUSE_SECRET_KEY,
+    base_url=LANGFUSE_BASE_URL,
+)
 
 
 # ---------------------------
@@ -104,7 +113,12 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+        qdrant_url = os.environ["QDRANT_URL"]
+        qdrant_api_key = os.environ["QDRANT_API_KEY"]
+        qdrant_client = QdrantClient(
+            url=qdrant_url,
+            api_key=qdrant_api_key,
+        )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
         if not collection_exists:
@@ -127,13 +141,14 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
             return qdrant_store
 
         # no need to create a vector store every time
-        else:
-            qdrant_store = QdrantVectorStore.from_existing_collection(
-                embedding=embeddings_model,
-                collection_name=collection_name,
-            )
+        qdrant_store = QdrantVectorStore.from_existing_collection(
+            url=qdrant_url,
+            api_key=qdrant_api_key,
+            embedding=embeddings_model,
+            collection_name=collection_name,
+        )
 
-            return qdrant_store
+        return qdrant_store
 
     except Exception as e:
         print(f"Error initializing the vector store: {e}")
@@ -147,7 +162,7 @@ product_db: QdrantVectorStore | list | None = None
 def get_product_db() -> QdrantVectorStore | list:
     global product_db
     if product_db is None:
-        product_db = embed_documents("datasets/smartphones.json")
+        product_db = embed_documents(os.path.join(BASE_DIR, "datasets", "smartphones.json"))
     return product_db
 
 
@@ -262,11 +277,11 @@ context_chain = context_prompt | trimmer | llm_with_tools
 review_chain = review_prompt | llm
 
 # Load NeMo Guardrails configuration and build input-validation runnable
-guardrails_config = RailsConfig.from_path("config/")
+guardrails_config = RailsConfig.from_path(os.path.join(BASE_DIR, "config"))
 input_rails = RunnableRails(guardrails_config, input_key="user_input")
 
 # Langfuse callback handler shared across requests
-langfuse_handler = CallbackHandler()
+langfuse_handler = CallbackHandler(public_key=LANGFUSE_PUBLIC_KEY)
 
 
 # ---------------------------
@@ -280,7 +295,7 @@ def ask(request: QueryRequest) -> dict:
     # Per-request Redis chat history keyed by session_id (TTL: 1 hour)
     redis_history = RedisChatMessageHistory(
         session_id=request.session_id,
-        redis_url=REDIS_URL,
+        url=REDIS_URL,
         ttl=3600,
     )
 

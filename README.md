@@ -82,6 +82,15 @@ source .venv/bin/activate  # On macOS/Linux
 # Run the application
 python main.py
 ```
+To verify the API is working, you can use the following command:
+```powershell
+$body = @{
+    user_input = "Tell me about the Samsung Ultra S24."
+    user_id = "test-user-123"
+    session_id = "test-session-456"
+} | ConvertTo-Json
+Invoke-RestMethod -Uri "http://localhost:8000/ask" -Method Post -ContentType "application/json" -Body $body
+```
 
 ### Adding New Dependencies
 
