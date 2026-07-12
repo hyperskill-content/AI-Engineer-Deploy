@@ -23,28 +23,28 @@ from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 from nemoguardrails.rails.llm.options import GenerationOptions
 
-from starter_code.models import QueryRequest
+from models import QueryRequest
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
 
 # Initialize the LLM with OpenAI API credentials (substitute for other models)
 llm = ChatOpenAI(
-    model=os.getenv("OPENAI_MODEL"),
-    base_url=os.getenv("OPENAI_BASE_URL"),
-    api_key=os.getenv("OPENAI_API_KEY")
+    model=os.environ["OPENAI_MODEL"],
+    base_url=os.environ["OPENAI_BASE_URL"],
+    api_key=os.environ["OPENAI_API_KEY"]
 )
 
 # Initialize the embeddings model with OpenAI API credentials
 embeddings_model = OpenAIEmbeddings(
-    model=os.getenv("OPENAI_EMBEDDINGS_MODEL"),
-    base_url=os.getenv("OPENAI_BASE_URL"),
-    api_key=os.getenv("OPENAI_API_KEY"),
+    model=os.environ["OPENAI_EMBEDDINGS_MODEL"],
+    base_url=os.environ["OPENAI_BASE_URL"],
+    api_key=os.environ["OPENAI_API_KEY"],
     show_progress_bar=True
 )
 
 # Redis configuration
-REDIS_URL = os.getenv("REDIS_CONNECTION_STRING", "redis://localhost:6380/0")
+REDIS_URL = os.environ["REDIS_CONNECTION_STRING"]
 
 # Initialize Langfuse client
 langfuse = get_client()
@@ -98,8 +98,8 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
         documents.append(Document(page_content=content))
 
     try:
-        url = os.environ.get("QDRANT_URL", "http://localhost:6333")
-        api_key = os.environ.get("QDRANT_API_KEY", None)
+        url = os.environ["QDRANT_URL"]
+        api_key = os.environ["QDRANT_API_KEY"]
         collection_name = "smartphones"
         qdrant_client = QdrantClient(url=url, api_key=api_key)
 

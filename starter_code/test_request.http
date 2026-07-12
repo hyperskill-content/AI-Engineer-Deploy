@@ -12,7 +12,7 @@ POST http://localhost:8000/ask
 Content-Type: application/json
 
 {
-  "user_input": "SHould I get the Apple iPhone 13",
+  "user_input": "Should I get the Apple iPhone 13",
   "user_id": "Karo-123",
   "session_id": "session-abc"
 }
