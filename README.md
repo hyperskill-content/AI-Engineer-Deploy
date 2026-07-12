@@ -68,9 +68,25 @@ This project uses [uv](https://docs.astral.sh/uv/) for Python package management
    ```
 
 ### Running the Application
-
+The application is not more a CLI program. It is changed in a FastAPI endpoint \ask.
+1/ Start the endpoint in a terminal:
 ```bash
-uv run python main.py
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload 
+```
+2/ Open another terminal session where you can call the endpoint.
+You can test it with curl, or as below:
+```bash
+$body = @{
+  user_input = "Can you recommend a smartphone with a good camera?"
+  user_id = "user-123"
+  session_id = "session-abc"
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Uri "http://localhost:8000/ask" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body
 ```
 
 If your IDE (VS Code, PyCharm) isn't recognizing the environment or you need to use tools that aren't uv-aware, activate the virtual environment manually:
@@ -135,6 +151,9 @@ We cover deploying LLM applications in a production-ready environment. You'll us
 ## **Project Structure**
 
 Here are the main directories and files in this repo:
+We created a module 'initialize' where most components are initialized.
+This module is imported in main.py. 
+We did not create a new folder for it because it is only 1 file.
 
 ```markdown
 ├── images
@@ -151,6 +170,8 @@ Here are the main directories and files in this repo:
 │   ├── datasets
 │   │   └── smartphones.json
 │   ├── .env.sample
+│   ├── .env
+│   ├── initialize.py
 │   ├── main.py
 │   ├── pyproject.toml
 │   └── uv.lock
