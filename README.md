@@ -50,6 +50,9 @@ This project uses [uv](https://docs.astral.sh/uv/) for Python package management
    git clone <repository-url>
    cd AI-Engineer-Deploy/starter_code
    ```
+REMARK: 
+Unfortunately I made my changes on a CLONE of the remote repository !
+I did forget to fork this remote repository to my own personal github account. 
 
 2. Install dependencies using `uv`:
    ```bash

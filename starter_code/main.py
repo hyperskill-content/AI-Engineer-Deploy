@@ -33,12 +33,6 @@ if not ENV_PATH.exists():
     raise FileNotFoundError(f"Expected .env file was not found at: {ENV_PATH}")
 dotenv.load_dotenv(dotenv_path=ENV_PATH, override=True)
 
-# Generate unique session_id and unique user_id once
-# session_id = f"session-{uuid.uuid4().hex[:8]}"
-# users = ["James", "George", "Mike", "Sherlock"]
-# user_id = users[uuid.uuid4().int % len(users)]
-# SHOULD THIS REMAIN as-is?
-
 # Initialize the LLM with OpenAI API credentials (substitute for other models)
 llm = ChatOpenAI(
     model=os.getenv("OPENAI_MODEL"),
@@ -253,61 +247,14 @@ context_chain, review_chain, input_rails, langfuse_handler = initialize_componen
 # ---------------------------
 # Main Conversation Loop
 # ---------------------------
-
 # Function to call by API endpoint
-async def process_user_query(request: QueryRequest) -> str:
+def process_user_query(request: QueryRequest) -> str:
     # Initialize Redis chat history with input_rails TTL (1 hour = 3600 seconds)
     redis_history = RedisChatMessageHistory(
         session_id=request.session_id,
         redis_url=REDIS_URL,
         ttl=3600  # Messages expire after 1 hour
     )
-
-    # TO REMOVE
-    # try:
-        # print("Welcome to the Smartphone Assistant! I can help you with smartphone features and comparisons.")
-        # while True:
-        #     user_input = input("User: ").strip()
-        #     if user_input.lower() in ["exit", "quit", "bye", "end"]:
-        #         # Create a parent span for the goodbye message
-        #         with langfuse.start_as_current_observation(
-        #             as_type="span",
-        #             name="user-query",
-        #             input=request.user_input
-        #         ) as span:
-        #             with propagate_attributes(
-        #                 session_id=request.session_id,
-        #                 user_id=request.user_id
-        #             ):
-        #                 # goodbye_message = goodbye_chain.invoke(
-        #                 #     {"user_id": request.user_id},
-        #                 #     config={
-        #                 #         "run_name": "goodbye-message",
-        #                 #         "callbacks": [langfuse_handler]
-        #                 #     }
-        #                 # )
-        #
-        #                 # Set the output on the parent span
-        #                 # span.update(output=goodbye_message.content)
-        #
-        #         # print(f"System: {goodbye_message.content}")
-        #
-        #         # # Collect user feedback about the entire conversation
-        #         # feedback = input("\nWas this conversation helpful? (Yes/No): ").strip()
-        #         # user_comment = input("Please give us a reason for your answer. This will help us improve: ").strip()
-        #
-        #         # Score at the session level (not individual trace)
-        #         # NOT REQUEST FOR SCORING (only online_
-        #         langfuse.create_score(
-        #             session_id=session_id,  # Use the session_id from the start of the conversation
-        #             name="conversation_usefulness",
-        #             value=feedback,
-        #             data_type="CATEGORICAL",
-        #             comment=user_comment
-        #         )
-        #
-        #         # print("\nThank you for your feedback!")
-        #         break
 
     # Load conversation history from Redis
     conversation = list(redis_history.messages)
@@ -328,8 +275,7 @@ async def process_user_query(request: QueryRequest) -> str:
             session_id=request.session_id,
             user_id=request.user_id
         ):
-
-            validation_result = await input_rails.rails.generate_async(
+            validation_result = input_rails.rails.generate(
                 messages=[{"role": "user", "content": request.user_input}],
                 options=GenerationOptions(
                     rails=["input"],
@@ -390,28 +336,20 @@ async def process_user_query(request: QueryRequest) -> str:
 
     return response.content
 
-    # except Exception as e:
-    #     print(f"An unexpected error occurred in the main loop: {e}")
-    #     sys.exit(1)
-
-
 # Define the /ask POST endpoint
 @app.post("/ask")
-async def ask(request: QueryRequest) -> Dict[str, str]:  # TO CONFIRM
+def ask(request: QueryRequest) -> Dict[str, str]:  # TO CONFIRM
     # Perform search ('ask') using request.user_input
     if not request.user_input.strip():
         raise HTTPException (status_code=400, detail="user_input cannot be empty")
-    if not request.user_input:
-        raise HTTPException(status_code=400, detail="user input cannot be empty")
     if request.user_id is None:
         raise HTTPException(status_code=400, detail="user id cannot be empty")
     if request.session_id is None:
         raise HTTPException(status_code=400, detail="session id cannot be empty")
     # CALL FUNCTION TO PERFORM SEARCH AND RETURN RESPONSE
     try:
-        answer = await process_user_query (request)
+        answer = process_user_query (request)
         return {"response": answer}
-
     except Exception as e:
         raise HTTPException (status_code=500, detail=str (e))
 
