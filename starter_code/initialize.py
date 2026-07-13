@@ -3,6 +3,7 @@ from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langfuse.langchain import CallbackHandler
 from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
+from nemoguardrails.rails.llm.options import GenerationOptions
 from pathlib import Path
 
 BASE_DIR = Path (__file__).resolve ().parent

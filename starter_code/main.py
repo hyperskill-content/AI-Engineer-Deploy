@@ -15,10 +15,11 @@ from langchain_qdrant import QdrantVectorStore
 from langchain_redis import RedisChatMessageHistory
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
+from qdrant_client.http import models
 from langfuse import observe, propagate_attributes, get_client
 from langfuse.langchain import CallbackHandler
 from nemoguardrails import RailsConfig
-from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
+from GenerationOptions.integrations.langchain.runnable_rails import RunnableRails
 from nemoguardrails.rails.llm.options import GenerationOptions
 from fastapi import FastAPI, HTTPException
 from typing import Any, Optional, List, Dict
@@ -49,7 +50,7 @@ embeddings_model = OpenAIEmbeddings(
 )
 
 # Redis configuration
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+REDIS_URL = os.getenv("REDIS_URL")
 
 # Initialize Langfuse client
 langfuse = get_client()
@@ -120,7 +121,11 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+        # qdrant_client = QdrantClient("http://localhost:6333"
+        qdrant_client = QdrantClient (
+            url=os.environ["QDRANT_URL"],
+            api_key=os.environ["QDRANT_API_KEY"]
+        )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
         if not collection_exists:
