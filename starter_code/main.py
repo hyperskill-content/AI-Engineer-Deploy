@@ -1,13 +1,13 @@
 # Start from the last coding stage of the previous LLM evals project
+import dotenv
 import json
+import logging
 import os
 import sys
 import uuid
-from pathlib import Path
-import logging
 import uuid
-
-import dotenv
+import uvicorn
+from fastapi import FastAPI, HTTPException
 from langchain_core.documents import Document
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, trim_messages
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate, PromptTemplate
@@ -15,25 +15,25 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_redis import RedisChatMessageHistory
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
-from qdrant_client.http import models
 from langfuse import observe, propagate_attributes, get_client
 from langfuse.langchain import CallbackHandler
 from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 from nemoguardrails.rails.llm.options import GenerationOptions
-from fastapi import FastAPI, HTTPException
-from typing import Any, Optional, List, Dict
+from pathlib import Path
 from pydantic import BaseModel
-import uvicorn
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
+from qdrant_client.http.models import Distance, VectorParams
+from typing import Any, Optional, List, Dict
+
 from initialize import initialize_components
 
 # Load environment variables from .env file
 BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
-if not ENV_PATH.exists():
-    raise FileNotFoundError(f"Expected .env file was not found at: {ENV_PATH}")
+# if not ENV_PATH.exists():
+#     raise FileNotFoundError(f"Expected .env file was not found at: {ENV_PATH}")
 dotenv.load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 # Load logger
@@ -126,13 +126,19 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
 
     try:
         collection_name = "smartphones"
-        # qdrant_client = QdrantClient("http://localhost:6333"
         qdrant_client = QdrantClient (
             url=os.environ["QDRANT_URL"],
             api_key=os.environ["QDRANT_API_KEY"]
         )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
+
+        qdrant_store = QdrantVectorStore (
+            client=qdrant_client,
+            collection_name=collection_name,
+            embedding=embeddings_model
+        )
+
         if not collection_exists:
             qdrant_client.create_collection(
                 collection_name=collection_name,
@@ -142,11 +148,11 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
                 ),
             )
 
-            qdrant_store = QdrantVectorStore(
-                client=qdrant_client,
-                collection_name=collection_name,
-                embedding=embeddings_model
-            )
+            # qdrant_store = QdrantVectorStore(
+            #     client=qdrant_client,
+            #     collection_name=collection_name,
+            #     embedding=embeddings_model
+            # )
 
             qdrant_store.add_documents(documents=documents)
 

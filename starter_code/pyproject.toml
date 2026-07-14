@@ -19,6 +19,7 @@ dependencies = [
     "nemoguardrails>=0.22.0",
     "fastapi",
     "uvicorn",
+    "ruff>=0.15.21",
 ]
 
 [dependency-groups]

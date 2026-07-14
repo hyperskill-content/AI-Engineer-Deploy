@@ -1,28 +1,50 @@
 # Python cache files
 __pycache__/
+__pycache__
 *.py[cod]
 
 # Virtual environment directories
+.venv/
 venv/
-.env
+env/
+ENV/
 
 # Local configuration files
-*.env
+.env
+.env.*
+!.env.sample
 
 # IDE and editor directories
 .idea/
 .vscode/
 
+# Python/tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.tox/
+.nox/
+.cache/
+
 # Build directories
 build/
 dist/
-
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
 
 # Logs
 *.log
+logs/
+*.pid
 
 # Coverage reports
 *.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
@@ -30,11 +52,19 @@ dist/
 # Miscellaneous
 *.swp
 
+# git data
+.git
+.gitignore
+.gitattributes
+
 # System files
 .DS_Store
+Thumbs.db
 
 # Python bytecode files
 *.pyc
+*.pyo
+*.pyd
 
 # C extensions
 *.so
@@ -44,6 +74,12 @@ dist/
 
 # Temporary files
 *.tmp
+*.temp
+tmp/
+temp/
+*.swp
+*.swo
+*~
 
 # Documentation build directories
 docs/_build/
