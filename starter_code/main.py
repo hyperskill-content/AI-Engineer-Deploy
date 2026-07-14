@@ -4,6 +4,8 @@ import os
 import sys
 import uuid
 from pathlib import Path
+import logging
+import uuid
 
 import dotenv
 from langchain_core.documents import Document
@@ -19,7 +21,7 @@ from qdrant_client.http import models
 from langfuse import observe, propagate_attributes, get_client
 from langfuse.langchain import CallbackHandler
 from nemoguardrails import RailsConfig
-from GenerationOptions.integrations.langchain.runnable_rails import RunnableRails
+from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 from nemoguardrails.rails.llm.options import GenerationOptions
 from fastapi import FastAPI, HTTPException
 from typing import Any, Optional, List, Dict
@@ -33,6 +35,9 @@ ENV_PATH = BASE_DIR / ".env"
 if not ENV_PATH.exists():
     raise FileNotFoundError(f"Expected .env file was not found at: {ENV_PATH}")
 dotenv.load_dotenv(dotenv_path=ENV_PATH, override=True)
+
+# Load logger
+logger = logging.getLogger(__name__)
 
 # Initialize the LLM with OpenAI API credentials (substitute for other models)
 llm = ChatOpenAI(
@@ -355,8 +360,18 @@ def ask(request: QueryRequest) -> Dict[str, str]:  # TO CONFIRM
     try:
         answer = process_user_query (request)
         return {"response": answer}
-    except Exception as e:
-        raise HTTPException (status_code=500, detail=str (e))
+    except HTTPException:
+        raise
+    except Exception:
+        error_id = str(uuid.uuid4())
+        logger.exception("Unexpected error while processing /ask request. error_id=%s", error_id)
+        raise HTTPException(
+            status_code=500,
+            detail = {
+                "message": "An internal server error occurred during /ask request.",
+                "error_id": error_id,
+        },
+        )
 
 
 if __name__ == "__main__":
