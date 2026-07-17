@@ -17,14 +17,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy dependency files first
+COPY pyproject.toml uv.lock ./
+
 # Install dependencies first using cache mounts for faster subsequent builds
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
     uv sync --frozen --no-install-project --no-dev
 
-# Copy the rest of the application files
-COPY . /app
+# Copy only the specific files and directories required to run the app
+COPY main.py models.py ./
+COPY config/ ./config/
+COPY datasets/ ./datasets/
 
 # Synchronize the project (ensuring everything is compiled and placed in .venv)
 RUN --mount=type=cache,target=/root/.cache/uv \
