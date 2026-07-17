@@ -23,7 +23,7 @@ from nemoguardrails import RailsConfig
 from nemoguardrails.integrations.langchain.runnable_rails import RunnableRails
 from nemoguardrails.rails.llm.options import GenerationOptions
 
-from starter_code.models import QueryRequest
+from models import QueryRequest
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
@@ -169,7 +169,7 @@ def smartphone_info_tool(model: str) -> str:
 # Tool Call Handling and Response Generation
 # ---------------------------
 @observe(name="generate_context")
-async def generate_context(ai_message: AIMessage, conversation: list, config: dict | None = None) -> None:
+def generate_context(ai_message: AIMessage, conversation: list, config: dict | None = None) -> None:
     """
     Process tool calls from the language model and append their responses as ToolMessage objects
     to the conversation history in place.
@@ -199,7 +199,7 @@ async def generate_context(ai_message: AIMessage, conversation: list, config: di
         for tool_call in ai_message.tool_calls:
             if tool_call["name"] == "SmartphoneInfo":
                 # Pass config with callbacks to ensure tool invocation is traced
-                tool_output = await smartphone_info_tool.ainvoke(tool_call, config=config)
+                tool_output = smartphone_info_tool.invoke(tool_call, config=config)
                 conversation.append(tool_output)
 
     except Exception as e:
@@ -214,7 +214,7 @@ async def generate_context(ai_message: AIMessage, conversation: list, config: di
 # ---------------------------
 # Main Conversation Loop
 # ---------------------------
-async def process_query(request: QueryRequest):
+def process_query(request: QueryRequest):
     # List of available tools
     tools = [smartphone_info_tool]
 
@@ -296,7 +296,7 @@ async def process_query(request: QueryRequest):
                     user_id=request.user_id
                 ):
 
-                    validation_result = await input_rails.rails.generate_async(
+                    validation_result = input_rails.rails.generate(
                         messages=[{"role": "user", "content": user_input}],
                         options=GenerationOptions(
                         rails=["input"],
@@ -320,7 +320,7 @@ async def process_query(request: QueryRequest):
                         continue  # Skip saving to Redis and proceed to next input
 
                     # Context chain invocation (with trimmer to limit tokens)
-                    ai_with_tools = await context_chain.ainvoke(
+                    ai_with_tools = context_chain.invoke(
                         {"user_input": user_input, "conversation": conversation},
                         config={
                             "run_name": "context",
@@ -330,14 +330,14 @@ async def process_query(request: QueryRequest):
 
                     # Process tool calls and add results to in-memory conversation
                     # Pass config with callbacks to ensure tool invocations are traced
-                    await generate_context(
+                    generate_context(
                         ai_with_tools,
                         conversation,
                         config={"callbacks": [langfuse_handler]}
                     )
 
                     # Final response chain invocation
-                    response = await review_chain.ainvoke(
+                    response = review_chain.invoke(
                         {"user_id": request.user_id, "user_input": user_input, "conversation": conversation},
                         config={
                             "run_name": "final-response",
@@ -366,9 +366,9 @@ app = FastAPI(title="AI-powered smartphone assistant")
 # Ask endpoint: responds to user's question about smartphones.
 @app.post("/ask")
 # Create an async function that handles the ask endpoint:
-async def ask(request: QueryRequest):
+def ask(request: QueryRequest):
 # Return a dictionary, which FastAPI automatically converts into JSON format:
-    response = await process_query(request)
+    response = process_query(request)
     return {"response": response}
 
 if __name__ == "__main__":
