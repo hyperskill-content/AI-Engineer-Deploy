@@ -16,3 +16,13 @@ Content-Type: application/json
   "user_id": "user-123",
   "session_id": "session-abc"
 }
+
+### Trigger guardrails: queries like ordering, returns, tracking
+POST http://localhost:8000/ask
+Content-Type: application/json
+
+{
+  "user_input": "I need to return my phone",
+  "user_id": "user-567",
+  "session_id": "session-567"
+}
