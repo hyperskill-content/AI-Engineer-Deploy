@@ -312,6 +312,7 @@ def process_query(request: QueryRequest):
                         metadata={"triggered_input_rail": validation_context.get("triggered_input_rail")},
                     )
                     print(f"System: {rail_response}")
+                    return rail_response
 
                 # Context chain invocation (with trimmer to limit tokens)
                 ai_with_tools = context_chain.invoke(
