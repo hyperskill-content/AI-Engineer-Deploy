@@ -49,6 +49,29 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
 # Initialize Langfuse client
 langfuse = get_client()
 
+# Fetch prompts from Langfuse
+context_lf_prompt = langfuse.get_prompt("context_system_prompt")
+review_lf_prompt = langfuse.get_prompt("review_system_prompt")
+
+# Create message trimmer for context chain to limit token usage
+trimmer = trim_messages(
+    strategy="last",  # Keep the most recent messages
+    token_counter=llm,  # Use LLM to count tokens
+    max_tokens=500,  # Maximum tokens for conversation history
+    start_on="human",  # Start trimmed history with a human message
+    end_on=("human", "tool"),  # End on human or tool message
+    include_system=True,  # Always include system message
+)
+
+# Load NeMo Guardrails configuration
+guardrails_config = RailsConfig.from_path("config/")
+
+# Create guardrail instance for input validation only
+# We'll use it separately to validate user input before the chain
+input_rails = RunnableRails(guardrails_config, input_key="user_input")
+
+# Initialize the Langfuse handler once for the entire conversation
+langfuse_handler = CallbackHandler()
 
 # ---------------------------
 # Load JSON Data and Build Qdrant Vector Store
@@ -221,10 +244,6 @@ def process_query(request: QueryRequest):
     # Bind the tools to the language model instance
     llm_with_tools = llm.bind_tools(tools)
 
-    # Fetch prompts from Langfuse
-    context_lf_prompt = langfuse.get_prompt("context_system_prompt")
-    review_lf_prompt = langfuse.get_prompt("review_system_prompt")
-
     # Create LangChain prompts from Langfuse prompts
     # Extract the first message (system message) and add MessagesPlaceholder for conversation history
     context_prompt = ChatPromptTemplate.from_messages([
@@ -239,29 +258,9 @@ def process_query(request: QueryRequest):
     ])
     review_prompt.metadata = {"langfuse_prompt": review_lf_prompt}
 
-    # Create message trimmer for context chain to limit token usage
-    trimmer = trim_messages(
-        strategy="last",  # Keep the most recent messages
-        token_counter=llm,  # Use LLM to count tokens
-        max_tokens=500,  # Maximum tokens for conversation history
-        start_on="human",  # Start trimmed history with a human message
-        end_on=("human", "tool"),  # End on human or tool message
-        include_system=True,  # Always include system message
-    )
-
     # Build chains (trimmer only on context_chain to manage tool call context)
     context_chain = context_prompt | trimmer | llm_with_tools
     review_chain = review_prompt | llm
-
-    # Load NeMo Guardrails configuration
-    guardrails_config = RailsConfig.from_path("config/")
-
-    # Create guardrails instance for input validation only
-    # We'll use it separately to validate user input before the chain
-    input_rails = RunnableRails(guardrails_config, input_key="user_input")
-
-    # Initialize the Langfuse handler once for the entire conversation
-    langfuse_handler = CallbackHandler()
 
     # Initialize Redis chat history with TTL (1 hour = 3600 seconds)
     redis_history = RedisChatMessageHistory(
@@ -271,90 +270,85 @@ def process_query(request: QueryRequest):
     )
 
     try:
-        while True:
-            user_input = request.user_input
-            if user_input.lower() in ["exit", "quit", "bye", "end"]:
-                break
+        user_input = request.user_input
 
-            # Load conversation history from Redis
-            conversation = list(redis_history.messages)
+        # Load conversation history from Redis
+        conversation = list(redis_history.messages)
 
-            # Create user message
-            user_message = HumanMessage(user_input)
-            # Add to in-memory conversation for this turn
-            conversation.append(user_message)
+        # Create user message
+        user_message = HumanMessage(user_input)
+        # Add to in-memory conversation for this turn
+        conversation.append(user_message)
 
-            # Create a parent span for this user query to group all chain invocations
-            with langfuse.start_as_current_observation(
+        # Create a parent span for this user query to group all chain invocations
+        with langfuse.start_as_current_observation(
                 as_type="span",
                 name="user-query",
                 input=user_input
-            ) as span:
-                # Propagate trace attributes to all child observations
-                with propagate_attributes(
+        ) as span:
+            # Propagate trace attributes to all child observations
+            with propagate_attributes(
                     session_id=request.session_id,
                     user_id=request.user_id
-                ):
-
-                    validation_result = input_rails.rails.generate(
-                        messages=[{"role": "user", "content": user_input}],
-                        options=GenerationOptions(
+            ):
+                validation_result = input_rails.rails.generate(
+                    messages=[{"role": "user", "content": user_input}],
+                    options=GenerationOptions(
                         rails=["input"],
                         output_vars=["allowed", "triggered_input_rail", "bot_message"],
-                         ),
-                        )
+                    ),
+                )
 
-                    validation_context = validation_result.output_data or {}
-                    rail_triggered = validation_context.get("allowed") is False or bool(
-                            validation_context.get("triggered_input_rail")
-                        )
+                validation_context = validation_result.output_data or {}
+                rail_triggered = validation_context.get("allowed") is False or bool(
+                    validation_context.get("triggered_input_rail")
+                )
 
-                    if rail_triggered:
-                        # Rail triggered - skip further processing
-                        rail_response = validation_result.response[0]["content"]
-                        span.update(
-                            output=rail_response,
-                            metadata={"triggered_input_rail": validation_context.get("triggered_input_rail")},
-                        )
-                        print(f"System: {rail_response}")
-                        continue  # Skip saving to Redis and proceed to next input
-
-                    # Context chain invocation (with trimmer to limit tokens)
-                    ai_with_tools = context_chain.invoke(
-                        {"user_input": user_input, "conversation": conversation},
-                        config={
-                            "run_name": "context",
-                            "callbacks": [langfuse_handler]
-                        }
+                if rail_triggered:
+                    # Rail triggered - skip further processing
+                    rail_response = validation_result.response[0]["content"]
+                    span.update(
+                        output=rail_response,
+                        metadata={"triggered_input_rail": validation_context.get("triggered_input_rail")},
                     )
+                    print(f"System: {rail_response}")
 
-                    # Process tool calls and add results to in-memory conversation
-                    # Pass config with callbacks to ensure tool invocations are traced
-                    generate_context(
-                        ai_with_tools,
-                        conversation,
-                        config={"callbacks": [langfuse_handler]}
-                    )
+                # Context chain invocation (with trimmer to limit tokens)
+                ai_with_tools = context_chain.invoke(
+                    {"user_input": user_input, "conversation": conversation},
+                    config={
+                        "run_name": "context",
+                        "callbacks": [langfuse_handler]
+                    }
+                )
 
-                    # Final response chain invocation
-                    response = review_chain.invoke(
-                        {"user_id": request.user_id, "user_input": user_input, "conversation": conversation},
-                        config={
-                            "run_name": "final-response",
-                            "callbacks": [langfuse_handler]
-                        }
-                    )
+                # Process tool calls and add results to in-memory conversation
+                # Pass config with callbacks to ensure tool invocations are traced
+                generate_context(
+                    ai_with_tools,
+                    conversation,
+                    config={"callbacks": [langfuse_handler]}
+                )
 
-                # Set the output on the parent span
-                span.update(output=response.content)
+                # Final response chain invocation
+                response = review_chain.invoke(
+                    {"user_id": request.user_id, "user_input": user_input, "conversation": conversation},
+                    config={
+                        "run_name": "final-response",
+                        "callbacks": [langfuse_handler]
+                    }
+                )
 
-            print(f"System: {response.content}")
+            # Set the output on the parent span
+            span.update(output=response.content)
 
-            # Save ONLY clean messages to Redis (user input and final AI response)
-            # Tool calls and intermediate messages are NOT saved
-            redis_history.add_message(user_message)
-            redis_history.add_message(response)
-            return response.content
+        print(f"System: {response.content}")
+
+        # Save ONLY clean messages to Redis (user input and final AI response)
+        # Tool calls and intermediate messages are NOT saved
+        redis_history.add_message(user_message)
+        redis_history.add_message(response)
+        return response.content
 
     except Exception as e:
         print(f"An unexpected error occurred in the main loop: {e}")
