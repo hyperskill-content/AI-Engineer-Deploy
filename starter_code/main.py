@@ -5,7 +5,7 @@ import sys
 import uuid
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 import dotenv
 from langchain_core.documents import Document
@@ -353,7 +353,10 @@ def process_query(request: QueryRequest):
 
     except Exception as e:
         print(f"An unexpected error occurred in the main loop: {e}")
-        return f"An unexpected error occurred in the main loop: {e}"
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected error occurred in the main loop: {str(e)}"
+        )
 
 # Create an instance of app with FastAPI.
 app = FastAPI(title="AI-powered smartphone assistant")
