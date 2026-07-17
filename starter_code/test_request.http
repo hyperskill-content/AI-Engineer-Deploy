@@ -16,3 +16,23 @@ Content-Type: application/json
   "user_id": "Karo-123",
   "session_id": "session-abc"
 }
+
+###
+POST http://localhost:8000/ask
+Content-Type: application/json
+
+{
+  "user_input": "Compare the Apple iPhone 13 and Apple iPhone 14",
+  "user_id": "user-123",
+  "session_id": "session-abc"
+}
+
+### Trigger guardrails: queries like ordering, returns, tracking
+POST http://localhost:8000/ask
+Content-Type: application/json
+
+{
+  "user_input": "I need to return my phone",
+  "user_id": "user-567",
+  "session_id": "session-567"
+}
