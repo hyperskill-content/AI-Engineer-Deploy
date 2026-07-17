@@ -6,3 +6,13 @@ Content-Type: application/json
   "user_id": "user-123",
   "session_id": "session-abc"
 }
+
+###
+POST http://localhost:8000/ask
+Content-Type: application/json
+
+{
+  "user_input": "Compare the Apple iPhone 13 and Apple iPhone 14",
+  "user_id": "user-123",
+  "session_id": "session-abc"
+}
