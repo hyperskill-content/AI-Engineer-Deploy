@@ -1,0 +1,13 @@
+Docker image is built and pushed to Docker Hub.
+Here my image URL:
+https://hub.docker.com/layers/frankvr/aideployapi/v1/images/sha256-a7e4bda16a8b76bcfdf415994085920681b5aecd279c624119402ade213374cd
+
+Also I created an EC2 instance, with ID:
+i-017ec01b7fb6f65db
+
+Afterwards the image on my docker hubs is pulled and deployed on the EC2 instance.
+The EC2 instance is running and the API is up and running.
+The API is reachable via the public IP address.
+I can see the OpenAPI documentation of the API.
+
+More information (URL of public IP, screen prints) are provided through other means.
