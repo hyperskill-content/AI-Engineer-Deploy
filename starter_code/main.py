@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import uuid
+import redis
 from typing import Any
 
 import uvicorn
@@ -47,7 +48,15 @@ embeddings_model = OpenAIEmbeddings(
 )
 
 # Redis configuration
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+# REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+redisClient=redis.Redis(
+    host=os.getenv("REDIS_CLOUD_HOST"),
+    port=13595,
+    username=os.getenv("REDIS_CLOUD_USERNAME"),
+    password=os.getenv("REDIS_CLOUD_PASSWORD"),
+    decode_responses=True
+)
+
 
 # Initialize Langfuse client
 langfuse = get_client()
@@ -102,7 +111,11 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+        qdrant_client = QdrantClient(
+            url=os.getenv("QDRANT_CLOUD_URL"),
+            api_key=os.getenv("QDRANT_CLOUD_KEY"),
+            cloud_inference=True
+        )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
         if not collection_exists:
@@ -227,6 +240,7 @@ llm_with_tools = llm.bind_tools(tools)
 context_lf_prompt = langfuse.get_prompt("context_system_prompt")
 review_lf_prompt = langfuse.get_prompt("review_system_prompt")
 
+
 # Create LangChain prompts from Langfuse prompts
 # Extract the first message (system message) and add MessagesPlaceholder for conversation history
 context_prompt = ChatPromptTemplate.from_messages([
@@ -275,7 +289,7 @@ def ask(query: QueryRequest) -> dict[str, str | list[str | Any]] | None:
         # Initialize Redis chat history with TTL (1 hour = 3600 seconds)
         redis_history = RedisChatMessageHistory(
             session_id=query.session_id,
-            redis_url=REDIS_URL,
+            redis_client=redisClient,
             ttl=3600  # Messages expire after 1 hour
         )
         conversation = list(redis_history.messages)
