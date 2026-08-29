@@ -108,19 +108,21 @@ def embed_documents(data: list):
     try:
         collection_name = "smartphones"
         qdrant_client = QdrantClient(
-            url=os.getenv("QDRANT_URL", "http://localhost:6333"),
-            api_key=os.getenv("QDRANT_API_KEY"),
+            url=os.environ["QDRANT_URL"],
+            api_key=os.environ["QDRANT_API_KEY"],
         )
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
         if collection_exists:
             return QdrantVectorStore.from_existing_collection(
-                url=os.getenv("QDRANT_URL", "http://localhost:6333"),
-                api_key=os.getenv("QDRANT_API_KEY"),
+                url=os.environ["QDRANT_URL"],
+                api_key=os.environ["QDRANT_API_KEY"],
                 embedding=embeddings_model,
                 collection_name=collection_name,
             )
 
+        # First-run fallback: collection doesn't exist yet on this cluster,
+        # so create it and populate it once.
         qdrant_client.create_collection(
             collection_name=collection_name,
             vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
@@ -136,6 +138,7 @@ def embed_documents(data: list):
     except Exception as e:
         print(f"Error initializing the vector store: {e}")
         return None
+
 
 
 def get_product_db_and_models():
