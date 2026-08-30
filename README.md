@@ -144,7 +144,7 @@ Here are the main directories and files in this repo:
 │   ├── qdrant.png
 │   ├── redis.png
 │   └── UI.png
-├── starter_code
+├── app
 │   ├── config
 │   │   ├── config.yml
 │   │   └── prompts.yml
