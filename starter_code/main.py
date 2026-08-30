@@ -1,11 +1,12 @@
 import json
+import logging
 import os
 import re
 from difflib import SequenceMatcher
 
 import dotenv
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -27,6 +28,12 @@ from nemoguardrails.rails.llm.options import GenerationOptions
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
+
+# ---------------------------
+# Logging setup
+# ---------------------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("smartphone_assistant")
 
 # Matches this repo's .env.sample naming convention exactly
 REDIS_URL = os.getenv("REDIS_CONNECTION_STRING", "redis://localhost:6380")
@@ -266,91 +273,120 @@ input_rails = RunnableRails(guardrails_config, input_key="user_input")
 app = FastAPI(title="Smartphone Assistant API")
 
 
+# ---------------------------
+# Global exception handler: last line of defense.
+# Ensures that ANY unhandled exception anywhere in the app (this route,
+# future routes, middleware, etc.) returns a safe, generic error message
+# instead of leaking a raw traceback or internal exception details
+# (env values, internal hostnames, prompt names, etc.) to the caller.
+# ---------------------------
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled exception while processing request to %s", request.url)
+    return JSONResponse(
+        status_code=500,
+        content={"response": "Something went wrong on our end. Please try again later."},
+    )
+
+
 @app.post("/ask")
 def ask(request: QueryRequest):
-    user_input = request.user_input.strip()
     user_id = request.user_id
-    session_id = request.session_id
-
-    # Bind the calling user for LiteLLM per-user budget tracking on this request
-    request_llm = llm.bind(user=user_id)
-    request_context_chain = context_prompt | trimmer | request_llm.bind_tools(tools)
-    request_review_chain = review_prompt | request_llm
-
-    redis_history = RedisChatMessageHistory(
-        session_id=session_id,
-        redis_url=REDIS_URL,
-        ttl=3600,
-    )
-
-    # ---------------------------
-    # Guardrails input validation
-    # ---------------------------
     try:
-        validation_result = input_rails.rails.generate(
-            messages=[{"role": "user", "content": user_input}],
-            options=GenerationOptions(
-                rails=["input"],
-                output_vars=["allowed", "triggered_input_rail", "bot_message"],
-            ),
+        user_input = request.user_input.strip()
+        session_id = request.session_id
+
+        # Bind the calling user for LiteLLM per-user budget tracking on this request
+        request_llm = llm.bind(user=user_id)
+        request_context_chain = context_prompt | trimmer | request_llm.bind_tools(tools)
+        request_review_chain = review_prompt | request_llm
+
+        redis_history = RedisChatMessageHistory(
+            session_id=session_id,
+            redis_url=REDIS_URL,
+            ttl=3600,
         )
-    except RateLimitError as budget_error:
-        with langfuse.start_as_current_observation(
-            as_type="span", name="user-query-budget-exceeded", input={"user_input": user_input}
-        ) as span:
-            with propagate_attributes(session_id=session_id, user_id=user_id):
-                span.update(output={"response": str(budget_error)}, level="WARNING")
+
+        # ---------------------------
+        # Guardrails input validation
+        # ---------------------------
+        try:
+            validation_result = input_rails.rails.generate(
+                messages=[{"role": "user", "content": user_input}],
+                options=GenerationOptions(
+                    rails=["input"],
+                    output_vars=["allowed", "triggered_input_rail", "bot_message"],
+                ),
+            )
+        except RateLimitError as budget_error:
+            with langfuse.start_as_current_observation(
+                as_type="span", name="user-query-budget-exceeded", input={"user_input": user_input}
+            ) as span:
+                with propagate_attributes(session_id=session_id, user_id=user_id):
+                    span.update(output={"response": str(budget_error)}, level="WARNING")
+            return JSONResponse(
+                status_code=429,
+                content={"response": f"Sorry {user_id}, you have reached your usage limit for today. Please try again later."},
+            )
+
+        validation_context = validation_result.output_data or {}
+        rail_triggered = validation_context.get("allowed") is False or bool(
+            validation_context.get("triggered_input_rail")
+        )
+
+        if rail_triggered:
+            blocked_message = validation_result.response[0]["content"]
+            with langfuse.start_as_current_observation(
+                as_type="span", name="user-query-blocked", input={"user_input": user_input}
+            ) as span:
+                with propagate_attributes(session_id=session_id, user_id=user_id):
+                    span.update(output={"response": blocked_message}, level="WARNING")
+            return {"response": blocked_message}
+
+        conversation = list(redis_history.messages)
+        user_message = HumanMessage(user_input)
+        conversation.append(user_message)
+
+        try:
+            with langfuse.start_as_current_observation(
+                as_type="span", name="user-query", input={"user_input": user_input}
+            ) as span:
+                with propagate_attributes(session_id=session_id, user_id=user_id):
+                    ai_message = request_context_chain.invoke(
+                        {"user_input": user_input, "conversation": conversation},
+                        config={"run_name": "context", "callbacks": [langfuse_handler]},
+                    )
+                    generate_context(ai_message, conversation)
+
+                    response = request_review_chain.invoke(
+                        {"user_id": user_id, "user_input": user_input, "conversation": conversation},
+                        config={"run_name": "final-response", "callbacks": [langfuse_handler]},
+                    )
+
+                span.update(output={"response": response.content})
+
+        except RateLimitError:
+            return JSONResponse(
+                status_code=429,
+                content={"response": f"Sorry {user_id}, you have reached your usage limit for today. Please try again later."},
+            )
+
+        redis_history.add_message(user_message)
+        redis_history.add_message(response)
+
+        return {"response": response.content}
+
+    except RateLimitError:
         return JSONResponse(
             status_code=429,
             content={"response": f"Sorry {user_id}, you have reached your usage limit for today. Please try again later."},
         )
-
-    validation_context = validation_result.output_data or {}
-    rail_triggered = validation_context.get("allowed") is False or bool(
-        validation_context.get("triggered_input_rail")
-    )
-
-    if rail_triggered:
-        blocked_message = validation_result.response[0]["content"]
-        with langfuse.start_as_current_observation(
-            as_type="span", name="user-query-blocked", input={"user_input": user_input}
-        ) as span:
-            with propagate_attributes(session_id=session_id, user_id=user_id):
-                span.update(output={"response": blocked_message}, level="WARNING")
-        return {"response": blocked_message}
-
-    conversation = list(redis_history.messages)
-    user_message = HumanMessage(user_input)
-    conversation.append(user_message)
-
-    try:
-        with langfuse.start_as_current_observation(
-            as_type="span", name="user-query", input={"user_input": user_input}
-        ) as span:
-            with propagate_attributes(session_id=session_id, user_id=user_id):
-                ai_message = request_context_chain.invoke(
-                    {"user_input": user_input, "conversation": conversation},
-                    config={"run_name": "context", "callbacks": [langfuse_handler]},
-                )
-                generate_context(ai_message, conversation)
-
-                response = request_review_chain.invoke(
-                    {"user_id": user_id, "user_input": user_input, "conversation": conversation},
-                    config={"run_name": "final-response", "callbacks": [langfuse_handler]},
-                )
-
-            span.update(output={"response": response.content})
-
-    except RateLimitError as budget_error:
+    except Exception:
+        logger.exception("Unhandled error in /ask for user_id=%s", user_id)
         return JSONResponse(
-            status_code=429,
-            content={"response": f"Sorry {user_id}, you have reached your usage limit for today. Please try again later."},
+            status_code=500,
+            content={"response": "Something went wrong on our end. Please try again later."},
         )
-
-    redis_history.add_message(user_message)
-    redis_history.add_message(response)
-
-    return {"response": response.content}
 
 
 if __name__ == "__main__":
