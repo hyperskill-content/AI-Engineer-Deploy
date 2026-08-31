@@ -59,10 +59,14 @@ RUN groupadd --system app \
 
 WORKDIR /app
 
-# Copy the fully-built virtual environment and application
-# source from the builder stage, owned by the app user so it
-# can read/write as needed at runtime.
-COPY --from=builder --chown=app:app /app/.venv /app/.venv
+# Copy the fully-built application from the builder stage,
+# owned by the app user so it can read/write as needed at
+# runtime. Note: /app already contains .venv as a subdirectory
+# (created by `uv sync` in the builder stage), so a single
+# COPY here brings the venv along with it. Copying /app/.venv
+# separately beforehand would duplicate the entire virtual
+# environment across two image layers, needlessly bloating
+# the final image size.
 COPY --from=builder --chown=app:app /app /app
 
 # Make the venv's binaries (uvicorn, gunicorn, etc.) available
