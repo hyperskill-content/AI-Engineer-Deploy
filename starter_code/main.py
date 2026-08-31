@@ -47,7 +47,10 @@ embeddings_model = OpenAIEmbeddings(
 )
 
 # Redis configuration
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost:6380")
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+REDIS_USER = os.getenv("REDIS_USER")
+REDIS_URL = f"redis://{REDIS_USER}:{REDIS_PASSWORD}@structure-sand-box-97148.db.redis.io:19136"
 
 # Initialize Langfuse client
 langfuse = get_client()
@@ -96,7 +99,10 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
 
     try:
         collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+        qdrant_client = QdrantClient(
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY"),
+            cloud_inference=True)
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
         if not collection_exists:
