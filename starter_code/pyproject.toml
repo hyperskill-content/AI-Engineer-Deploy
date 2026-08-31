@@ -19,7 +19,6 @@ dependencies = [
     "nemoguardrails>=0.22.0",
     "fastapi",
     "uvicorn",
-    "gunicorn",
     "pydantic"
 ]
 
