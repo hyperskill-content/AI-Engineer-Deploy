@@ -88,7 +88,7 @@ Run the image to verify it works correctly. The image should be around ~600-700M
 
 ### **Deliverables**
 
-You should have a `Dockerfile` that builds a production-ready image for your application. Verify that you're ignoring unnecessary files, optimizing image size, following security best practices, and using the correct production `CMD`. Test the image in your local environment.
+You should have a `../starter_code/Dockerfile` that builds a production-ready image for your application. Verify that you're ignoring unnecessary files, optimizing image size, following security best practices, and using the correct production `CMD`. Test the image in your local environment.
 
 ### **Useful Resources**
 
