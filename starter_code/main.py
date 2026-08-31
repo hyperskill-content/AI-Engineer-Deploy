@@ -51,6 +51,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
 
 # Initialize Langfuse client
 langfuse = get_client()
+langfuse_handler = CallbackHandler()
 
 
 # ---------------------------
@@ -231,6 +232,7 @@ class QueryRequest(BaseModel):
 
 @app.post("/ask")
 def ask_endpoint(request: QueryRequest):
+    # Dynamically bind history for the active session
     langfuse_handler = CallbackHandler()
 
     # Dynamically bind history for the active session
