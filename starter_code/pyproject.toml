@@ -17,6 +17,9 @@ dependencies = [
     "langchain-redis>=0.2.5",
     "redis>=7.4.0",
     "nemoguardrails>=0.22.0",
+    "fastapi",
+    "uvicorn",
+    "pydantic"
 ]
 
 [dependency-groups]
