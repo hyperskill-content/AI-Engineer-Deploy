@@ -108,7 +108,7 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
         qdrant_client = QdrantClient(
             url=os.getenv("QDRANT_URL"),
             api_key=os.getenv("QDRANT_API_KEY"),
-            cloud_inference=True)
+            cloud_inference=True, check_compatibility=False)
 
         collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
         if not collection_exists:
