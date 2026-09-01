@@ -49,8 +49,14 @@ embeddings_model = OpenAIEmbeddings(
 # Redis configuration
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost:6380")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
-REDIS_USER = os.getenv("REDIS_USER")
-REDIS_URL = f"redis://{REDIS_USER}:{REDIS_PASSWORD}@structure-sand-box-97148.db.redis.io:19136"
+REDIS_USER = os.getenv("REDIS_USER", "default")
+
+if REDIS_PASSWORD:
+    REDIS_URL = f"redis://{REDIS_USER}:{REDIS_PASSWORD}@{REDIS_HOST}"
+else:
+    REDIS_URL = f"redis://{REDIS_HOST}"
+
+print(REDIS_URL)
 
 # Initialize Langfuse client
 langfuse = get_client()
