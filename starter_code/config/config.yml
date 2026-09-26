@@ -2,8 +2,6 @@ models:
   - type: main
     engine: openai
     model: gpt-4o-mini
-    parameters:
-      base_url: https://litellm.aks-hs-prod.int.hyperskill.org/openai
 
 rails:
   input:
