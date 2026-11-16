@@ -1,6 +1,7 @@
 # Start from the last coding stage of the previous LLM evals project
 # Task 1: the assistant now runs as a FastAPI web service with a POST /ask endpoint
 # Task 2: Qdrant, Redis and Langfuse are cloud services (addresses and keys come from .env)
+# Task 3: runs in a Docker image under gunicorn (see Dockerfile)
 import json
 import os
 from contextlib import asynccontextmanager
@@ -307,6 +308,9 @@ def build_pipeline() -> dict:
 
     # Load NeMo Guardrails configuration
     guardrails_config = RailsConfig.from_path("config/")
+    # Use the same LLM address as the rest of the app (OPENAI_BASE_URL) instead of the one
+    # written in config.yml, so it can change per environment (laptop, Docker, EC2)
+    guardrails_config.models[0].parameters["base_url"] = os.environ["OPENAI_BASE_URL"]
 
     return {
         # trimmer only on context_chain to manage tool call context

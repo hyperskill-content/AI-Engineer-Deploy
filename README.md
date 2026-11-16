@@ -87,6 +87,18 @@ The response is JSON: `{"response": "<the assistant's answer>"}`. To try it in a
 
 The Qdrant vector store is built on the first `SmartphoneInfo` tool call, not when the server starts.
 
+### Running with Docker
+
+The `Dockerfile` in `starter_code` builds a production image that runs the app with Gunicorn (2 Uvicorn workers) as a non-root user. From `starter_code`:
+
+```bash
+docker build -t hypersite:latest .
+docker run --env-file .env -p 8000:8000 hypersite:latest
+```
+
+- `--env-file` passes the values in `.env` to the container at runtime; `.env` is not copied into the image. Docker reads each value literally, so write `.env` values **without quotes**.
+- Inside the container, `localhost` means the container itself. If the LiteLLM proxy runs on your own computer, add `-e OPENAI_BASE_URL=http://host.docker.internal:4000` to `docker run`.
+
 If your IDE (VS Code, PyCharm) isn't recognizing the environment or you need to use tools that aren't uv-aware, activate the virtual environment manually:
 ```bash
 source .venv/bin/activate  # On macOS/Linux
@@ -164,7 +176,9 @@ Here are the main directories and files in this repo:
 │   │   └── prompts.yml
 │   ├── datasets
 │   │   └── smartphones.json
+│   ├── .dockerignore
 │   ├── .env.sample
+│   ├── Dockerfile
 │   ├── main.py
 │   ├── pyproject.toml
 │   └── uv.lock
