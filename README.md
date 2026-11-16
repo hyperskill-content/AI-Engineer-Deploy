@@ -73,6 +73,20 @@ This project uses [uv](https://docs.astral.sh/uv/) for Python package management
 uv run python main.py
 ```
 
+This starts a FastAPI web server at `http://localhost:8000` (it keeps running until you press `Ctrl+C`). The assistant is reached by sending a `POST` request to `/ask` with a JSON body:
+
+```json
+{
+  "user_input": "Tell me about the Samsung Galaxy S23",
+  "user_id": "James",
+  "session_id": "session-1234"
+}
+```
+
+The response is JSON: `{"response": "<the assistant's answer>"}`. To try it in a browser, open `http://localhost:8000/docs`, click `POST /ask`, then **Try it out**.
+
+The Qdrant vector store is built on the first `SmartphoneInfo` tool call, not when the server starts.
+
 If your IDE (VS Code, PyCharm) isn't recognizing the environment or you need to use tools that aren't uv-aware, activate the virtual environment manually:
 ```bash
 source .venv/bin/activate  # On macOS/Linux
