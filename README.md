@@ -154,6 +154,34 @@ Examples of changes that require documentation updates:
 - Adding configuration files or changing how configuration is loaded
 - Creating new directories for components, utilities, or services
 
+## **Deployment**
+
+The app is deployed on an AWS EC2 instance (Amazon Linux 2023, `t3.micro`, region `us-east-2`) and can be reached from anywhere:
+
+- **API docs (try it in a browser):** http://EC2_PUBLIC_IP/docs
+- **Endpoint:** `POST http://EC2_PUBLIC_IP/ask`
+- **Docker image (Docker Hub, public):** [jonahgreene01/hypersite](https://hub.docker.com/r/jonahgreene01/hypersite)
+
+Example request:
+
+```bash
+curl -X POST http://EC2_PUBLIC_IP/ask \
+  -H "Content-Type: application/json" \
+  -d '{"user_input": "What is the price and battery of the Samsung Galaxy S23?", "user_id": "James", "session_id": "session-1"}'
+```
+
+How it runs on the instance:
+
+```bash
+# Docker Engine installed with dnf; .env created on the instance with nano
+docker run -d -p 80:8000 --name hypersite --restart always --env-file ./.env jonahgreene01/hypersite:latest
+```
+
+- Port 80 on the instance is mapped to port 8000 in the container, so the URL needs no port number.
+- The security group allows inbound SSH (22), HTTP (80) and HTTPS (443).
+- On the instance, `OPENAI_BASE_URL` points to the course's LiteLLM server instead of a local proxy. Qdrant, Redis and Langfuse use the same cloud services as in Task 2.
+- The public IP changes if the instance is stopped and started again.
+
 ## **Learning Outcomes**
 
 We cover deploying LLM applications in a production-ready environment. You'll use tools and services like FastAPI for creating REST API endpoints, Docker for containerization, SaaS providers for various services, and AWS Cloud to ship and share what you've been building.
