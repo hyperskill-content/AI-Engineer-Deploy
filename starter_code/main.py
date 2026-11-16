@@ -1,5 +1,6 @@
 # Start from the last coding stage of the previous LLM evals project
 # Task 1: the assistant now runs as a FastAPI web service with a POST /ask endpoint
+# Task 2: Qdrant, Redis and Langfuse are cloud services (addresses and keys come from .env)
 import json
 import os
 from contextlib import asynccontextmanager
@@ -44,7 +45,7 @@ embeddings_model = OpenAIEmbeddings(
     show_progress_bar=True
 )
 
-# Redis configuration
+# Redis configuration (Redis Cloud connection string, set in .env)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
 
 # Initialize Langfuse client
@@ -72,14 +73,44 @@ class QueryRequest(BaseModel):
 @observe(name="embed_documents")
 def embed_documents(json_path: str) -> QdrantVectorStore | list:
     """
-    Load JSON data from the smartphones.json file and convert each entry to a Document.
+    Connect to the "smartphones" collection in Qdrant Cloud.
+    If the collection doesn't exist yet (first run on a new cluster), create it and
+    upload the smartphone documents from the JSON file.
+
     :param
         json_path (str): Path to the JSON file containing smartphone data.
 
     :returns
-        QdrantVectorStore | list: A Qdrant vector store built from the smartphone documents,
-            or an empty list if an error occurs.
+        QdrantVectorStore | list: The Qdrant vector store, or an empty list if an error occurs.
     """
+    collection_name = "smartphones"
+
+    try:
+        # Client for the Qdrant Cloud cluster (was QdrantClient("http://localhost:6333"))
+        qdrant_client = QdrantClient(
+            url=os.environ["QDRANT_URL"],          # the cluster's endpoint URL
+            api_key=os.environ["QDRANT_API_KEY"],  # the cluster's API key
+        )
+
+        collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
+
+        # Usual case: the data is already in the cloud collection, so just connect to it.
+        # The JSON file isn't read and nothing is embedded.
+        if collection_exists:
+            qdrant_store = QdrantVectorStore.from_existing_collection(
+                url=os.environ["QDRANT_URL"],
+                api_key=os.environ["QDRANT_API_KEY"],
+                embedding=embeddings_model,
+                collection_name=collection_name,
+            )
+
+            return qdrant_store
+
+    except Exception as e:
+        print(f"Error connecting to the vector store: {e}")
+        return []
+
+    # First run only: the collection doesn't exist, so build the documents and upload them.
     try:
         with open(json_path, "r") as f:
             data = json.load(f)
@@ -113,37 +144,23 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
         documents.append(Document(page_content=content))
 
     try:
-        collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+        qdrant_client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(
+                size=1536,
+                distance=Distance.COSINE,
+            ),
+        )
 
-        collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
-        if not collection_exists:
-            qdrant_client.create_collection(
-                collection_name=collection_name,
-                vectors_config=VectorParams(
-                    size=1536,
-                    distance=Distance.COSINE,
-                ),
-            )
+        qdrant_store = QdrantVectorStore(
+            client=qdrant_client,
+            collection_name=collection_name,
+            embedding=embeddings_model
+        )
 
-            qdrant_store = QdrantVectorStore(
-                client=qdrant_client,
-                collection_name=collection_name,
-                embedding=embeddings_model
-            )
+        qdrant_store.add_documents(documents=documents)
 
-            qdrant_store.add_documents(documents=documents)
-
-            return qdrant_store
-
-        # no need to create a vector store every time
-        else:
-            qdrant_store = QdrantVectorStore.from_existing_collection(
-                embedding=embeddings_model,
-                collection_name=collection_name,
-            )
-
-            return qdrant_store
+        return qdrant_store
 
     except Exception as e:
         print(f"Error initializing the vector store: {e}")
