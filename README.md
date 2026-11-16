@@ -73,6 +73,32 @@ This project uses [uv](https://docs.astral.sh/uv/) for Python package management
 uv run python main.py
 ```
 
+This starts a FastAPI web server at `http://localhost:8000` (it keeps running until you press `Ctrl+C`). The assistant is reached by sending a `POST` request to `/ask` with a JSON body:
+
+```json
+{
+  "user_input": "Tell me about the Samsung Galaxy S23",
+  "user_id": "James",
+  "session_id": "session-1234"
+}
+```
+
+The response is JSON: `{"response": "<the assistant's answer>"}`. To try it in a browser, open `http://localhost:8000/docs`, click `POST /ask`, then **Try it out**.
+
+The Qdrant vector store is built on the first `SmartphoneInfo` tool call, not when the server starts.
+
+### Running with Docker
+
+The `Dockerfile` in `starter_code` builds a production image that runs the app with Gunicorn (2 Uvicorn workers) as a non-root user. From `starter_code`:
+
+```bash
+docker build -t hypersite:latest .
+docker run --env-file .env -p 8000:8000 hypersite:latest
+```
+
+- `--env-file` passes the values in `.env` to the container at runtime; `.env` is not copied into the image. Docker reads each value literally, so write `.env` values **without quotes**.
+- Inside the container, `localhost` means the container itself. If the LiteLLM proxy runs on your own computer, add `-e OPENAI_BASE_URL=http://host.docker.internal:4000` to `docker run`.
+
 If your IDE (VS Code, PyCharm) isn't recognizing the environment or you need to use tools that aren't uv-aware, activate the virtual environment manually:
 ```bash
 source .venv/bin/activate  # On macOS/Linux
@@ -128,6 +154,34 @@ Examples of changes that require documentation updates:
 - Adding configuration files or changing how configuration is loaded
 - Creating new directories for components, utilities, or services
 
+## **Deployment**
+
+The app is deployed on an AWS EC2 instance (Amazon Linux 2023, `t3.micro`, region `us-east-2`) and can be reached from anywhere:
+
+- **API docs (try it in a browser):** http://EC2_PUBLIC_IP/docs
+- **Endpoint:** `POST http://EC2_PUBLIC_IP/ask`
+- **Docker image (Docker Hub, public):** [jonahgreene01/hypersite](https://hub.docker.com/r/jonahgreene01/hypersite)
+
+Example request:
+
+```bash
+curl -X POST http://EC2_PUBLIC_IP/ask \
+  -H "Content-Type: application/json" \
+  -d '{"user_input": "What is the price and battery of the Samsung Galaxy S23?", "user_id": "James", "session_id": "session-1"}'
+```
+
+How it runs on the instance:
+
+```bash
+# Docker Engine installed with dnf; .env created on the instance with nano
+docker run -d -p 80:8000 --name hypersite --restart always --env-file ./.env jonahgreene01/hypersite:latest
+```
+
+- Port 80 on the instance is mapped to port 8000 in the container, so the URL needs no port number.
+- The security group allows inbound SSH (22), HTTP (80) and HTTPS (443).
+- On the instance, `OPENAI_BASE_URL` points to the course's LiteLLM server instead of a local proxy. Qdrant, Redis and Langfuse use the same cloud services as in Task 2.
+- The public IP changes if the instance is stopped and started again.
+
 ## **Learning Outcomes**
 
 We cover deploying LLM applications in a production-ready environment. You'll use tools and services like FastAPI for creating REST API endpoints, Docker for containerization, SaaS providers for various services, and AWS Cloud to ship and share what you've been building.
@@ -150,7 +204,9 @@ Here are the main directories and files in this repo:
 │   │   └── prompts.yml
 │   ├── datasets
 │   │   └── smartphones.json
+│   ├── .dockerignore
 │   ├── .env.sample
+│   ├── Dockerfile
 │   ├── main.py
 │   ├── pyproject.toml
 │   └── uv.lock

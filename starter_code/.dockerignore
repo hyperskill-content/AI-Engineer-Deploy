@@ -1,0 +1,33 @@
+# Files Docker leaves out of the build context (so they're never copied into the image)
+
+# Secrets: environment variables are passed at runtime with --env-file instead
+.env
+*.env
+
+# Virtual environment: the image builds its own .venv for Linux
+.venv/
+venv/
+
+# Git
+.git/
+.gitignore
+
+# Python caches and bytecode
+__pycache__/
+*.py[cod]
+
+# IDE and editor folders
+.idea/
+.vscode/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+
+# OS files
+.DS_Store
+
+# Docker's own files (not needed inside the image)
+Dockerfile
+.dockerignore
