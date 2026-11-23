@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import uuid
+from pathlib import Path
 
 import dotenv
 from langchain_core.documents import Document
@@ -22,6 +23,19 @@ from nemoguardrails.rails.llm.options import GenerationOptions
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent
+QDRANT_URL = os.environ["QDRANT_URL"]
+QDRANT_API_KEY = os.environ["QDRANT_API_KEY"]
+REDIS_URL = os.environ["REDIS_URL"]
+
+for required_setting in (
+    "LANGFUSE_HOST",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+):
+    if not os.getenv(required_setting):
+        raise RuntimeError(f"Missing required environment variable: {required_setting}")
 
 # Generate unique session_id and user_id once
 session_id = f"session-{uuid.uuid4().hex[:8]}"
@@ -43,9 +57,6 @@ embeddings_model = OpenAIEmbeddings(
     show_progress_bar=True
 )
 
-# Redis configuration
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
-
 # Initialize Langfuse client
 langfuse = get_client()
 
@@ -55,28 +66,17 @@ langfuse = get_client()
 # ---------------------------
 
 @observe(name="embed_documents")
-def embed_documents(json_path: str) -> QdrantVectorStore | list:
+def embed_documents(json_path: Path) -> QdrantVectorStore:
     """
     Load JSON data from the smartphones.json file and convert each entry to a Document.
     :param
-        json_path (str): Path to the JSON file containing smartphone data.
+        json_path (Path): Path to the JSON file containing smartphone data.
 
     :returns
-        QdrantVectorStore | list: A Qdrant vector store built from the smartphone documents,
-            or an empty list if an error occurs.
+        QdrantVectorStore: A vector store connected to the cloud collection.
     """
-    try:
-        with open(json_path, "r") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: The file {json_path} was not found.")
-        return []
-    except json.JSONDecodeError as jde:
-        print(f"Error decoding JSON from file {json_path}: {jde}")
-        return []
-    except Exception as e:
-        print(f"An unexpected error occurred while reading {json_path}: {e}")
-        return []
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
 
     documents = []
     for entry in data:
@@ -97,46 +97,35 @@ def embed_documents(json_path: str) -> QdrantVectorStore | list:
         )
         documents.append(Document(page_content=content))
 
-    try:
-        collection_name = "smartphones"
-        qdrant_client = QdrantClient("http://localhost:6333")
+    collection_name = "smartphones"
+    qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
-        collection_exists = qdrant_client.collection_exists(collection_name=collection_name)
-        if not collection_exists:
-            qdrant_client.create_collection(
-                collection_name=collection_name,
-                vectors_config=VectorParams(
-                    size=1536,
-                    distance=Distance.COSINE,
-                ),
-            )
+    if not qdrant_client.collection_exists(collection_name=collection_name):
+        qdrant_client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(
+                size=1536,
+                distance=Distance.COSINE,
+            ),
+        )
+        qdrant_store = QdrantVectorStore(
+            client=qdrant_client,
+            collection_name=collection_name,
+            embedding=embeddings_model,
+        )
+        qdrant_store.add_documents(documents=documents)
+        return qdrant_store
 
-            qdrant_store = QdrantVectorStore(
-                client=qdrant_client,
-                collection_name=collection_name,
-                embedding=embeddings_model
-            )
-
-            qdrant_store.add_documents(documents=documents)
-
-            return qdrant_store
-
-        # no need to create a vector store every time
-        else:
-            qdrant_store = QdrantVectorStore.from_existing_collection(
-                embedding=embeddings_model,
-                collection_name=collection_name,
-            )
-
-            return qdrant_store
-
-    except Exception as e:
-        print(f"Error initializing the vector store: {e}")
-        return []
+    return QdrantVectorStore.from_existing_collection(
+        url=QDRANT_URL,
+        api_key=QDRANT_API_KEY,
+        embedding=embeddings_model,
+        collection_name=collection_name,
+    )
 
 
 # Initialize the vector store
-product_db = embed_documents("datasets/smartphones.json")
+product_db = embed_documents(BASE_DIR / "datasets" / "smartphones.json")
 
 
 # ---------------------------
