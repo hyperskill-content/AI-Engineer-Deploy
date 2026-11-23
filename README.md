@@ -73,6 +73,39 @@ This project uses [uv](https://docs.astral.sh/uv/) for Python package management
 uv run python main.py
 ```
 
+The FastAPI service listens on port `8000`. Send a request to `/ask` with the
+user's question, user ID, and session ID:
+
+```bash
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_input": "Which smartphone has the best battery life?",
+    "user_id": "user-123",
+    "session_id": "session-456"
+  }'
+```
+
+The response contains the recommendation in a `response` field. You can also
+start the service directly with `uv run uvicorn main:app --reload` from
+`starter_code/`.
+
+The assistant sends `user_id` to LiteLLM as the request's `user` value and
+`session_id` as metadata, so LiteLLM can associate usage with the user/session.
+Per-user budget enforcement must be configured for those user IDs in LiteLLM.
+To preserve the conversation-level usefulness evaluation, the frontend can
+submit feedback to `/feedback`:
+
+```bash
+curl -X POST http://localhost:8000/feedback \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "session-456",
+    "feedback": "Yes",
+    "comment": "The recommendation matched my needs."
+  }'
+```
+
 If your IDE (VS Code, PyCharm) isn't recognizing the environment or you need to use tools that aren't uv-aware, activate the virtual environment manually:
 ```bash
 source .venv/bin/activate  # On macOS/Linux
