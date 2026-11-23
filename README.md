@@ -67,6 +67,13 @@ This project uses [uv](https://docs.astral.sh/uv/) for Python package management
    # Edit .env with your API keys and configuration
    ```
 
+For Task 2, configure the managed services in `.env`: set `QDRANT_URL` and
+`QDRANT_API_KEY` from your Qdrant Cloud cluster, `REDIS_URL` to the Redis Cloud
+connection string, and `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, and
+`LANGFUSE_SECRET_KEY` from your Langfuse Cloud project. The app requires these
+cloud settings and no longer falls back to local Qdrant or Redis instances.
+Keep real credentials in `.env` only; `.env.sample` contains placeholders.
+
 ### Running the Application
 
 ```bash
