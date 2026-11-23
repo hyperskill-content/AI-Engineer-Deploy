@@ -8,8 +8,14 @@ from typing import Any, Literal
 import dotenv
 from fastapi import FastAPI
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, trim_messages
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    trim_messages,
+)
+from langchain_core.messages.utils import count_tokens_approximately
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
@@ -166,7 +172,7 @@ def get_prompts_and_trimmer():
 
     trimmer = trim_messages(
         strategy="last",
-        token_counter=llm,
+        token_counter=count_tokens_approximately,
         max_tokens=500,
         start_on="human",
         end_on=("human", "tool"),
@@ -179,12 +185,12 @@ def get_chains(user_id: str, session_id: str):
     context_prompt, review_prompt, trimmer = get_prompts_and_trimmer()
     request_llm = llm.bind(
         user=user_id,
-        metadata={"session_id": session_id},
+        extra_body={"metadata": {"session_id": session_id}},
     )
     llm_with_tools = llm.bind_tools(
         [smartphones_info_tool],
         user=user_id,
-        metadata={"session_id": session_id},
+        extra_body={"metadata": {"session_id": session_id}},
     )
     return context_prompt | trimmer | llm_with_tools, review_prompt | request_llm
 
